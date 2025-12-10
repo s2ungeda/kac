@@ -1,0 +1,27 @@
+{
+    "name": "kimchi-arbitrage",
+    "version": "1.0.0",
+    "description": "XRP Kimchi Premium Arbitrage System",
+    "dependencies": [
+        {
+            "name": "boost-beast",
+            "version>=": "1.75.0"
+        },
+        {
+            "name": "boost-asio",
+            "version>=": "1.75.0"  
+        },
+        {
+            "name": "boost-system",
+            "version>=": "1.75.0"
+        },
+        "curl",
+        "openssl",
+        "spdlog",
+        "simdjson",
+        "yaml-cpp",
+        "sqlite3",
+        "gtest",
+        "msgpack"
+    ]
+}

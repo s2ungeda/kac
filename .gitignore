@@ -1,0 +1,67 @@
+# .gitignore for C++ Arbitrage Project
+
+# Build directories
+build/
+cmake-build-*/
+out/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Compiled files
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+
+# vcpkg
+vcpkg_installed/
+
+# Logs
+logs/
+*.log
+
+# Config with secrets (use .example files)
+config/*.yaml
+!config/*.yaml.example
+config/*.json
+!config/*.json.example
+
+# State files
+state/
+*.dat
+*.db
+
+# API Keys - NEVER commit these
+secrets/
+*.pem
+*.key
+
+# Test artifacts
+test_results/
+coverage/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Core dumps
+core
+core.*
+
+# Watchdog state
+watchdog.pid
+watchdog.sock
