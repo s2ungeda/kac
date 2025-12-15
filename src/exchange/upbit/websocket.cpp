@@ -125,12 +125,7 @@ void UpbitWebSocket::parse_ticker(const nlohmann::json& data) {
         std::chrono::milliseconds(timestamp_ms)
     );
     
-    WebSocketEvent evt{
-        WebSocketEvent::Type::Ticker,
-        Exchange::Upbit,
-        ticker,
-        ""
-    };
+    WebSocketEvent evt(WebSocketEvent::Type::Ticker, Exchange::Upbit, ticker);
     
     emit_event(std::move(evt));
 }
@@ -157,25 +152,65 @@ void UpbitWebSocket::parse_orderbook(const nlohmann::json& data) {
         orderbook.bids.push_back(bid);
     }
     
+    // 상위 5개 호가 로그 (디버깅용)
+    if (orderbook.bids.size() >= 5) {
+        logger_->debug("[Upbit] {} Top 5 Bids: [{:.0f}@{:.4f}, {:.0f}@{:.4f}, {:.0f}@{:.4f}, {:.0f}@{:.4f}, {:.0f}@{:.4f}]",
+                      orderbook.symbol,
+                      orderbook.bids[0].price, orderbook.bids[0].quantity,
+                      orderbook.bids[1].price, orderbook.bids[1].quantity,
+                      orderbook.bids[2].price, orderbook.bids[2].quantity,
+                      orderbook.bids[3].price, orderbook.bids[3].quantity,
+                      orderbook.bids[4].price, orderbook.bids[4].quantity);
+        logger_->debug("[Upbit] {} Top 5 Asks: [{:.0f}@{:.4f}, {:.0f}@{:.4f}, {:.0f}@{:.4f}, {:.0f}@{:.4f}, {:.0f}@{:.4f}]",
+                      orderbook.symbol,
+                      orderbook.asks[0].price, orderbook.asks[0].quantity,
+                      orderbook.asks[1].price, orderbook.asks[1].quantity,
+                      orderbook.asks[2].price, orderbook.asks[2].quantity,
+                      orderbook.asks[3].price, orderbook.asks[3].quantity,
+                      orderbook.asks[4].price, orderbook.asks[4].quantity);
+    }
+    
     // 타임스탬프
     int64_t timestamp_ms = data["timestamp"];
     orderbook.timestamp = std::chrono::system_clock::time_point(
         std::chrono::milliseconds(timestamp_ms)
     );
     
-    WebSocketEvent evt{
-        WebSocketEvent::Type::OrderBook,
-        Exchange::Upbit,
-        orderbook,
-        ""
-    };
+    logger_->debug("[Upbit] OrderBook parsed - Symbol: {}, Bids: {}, Asks: {}, BestBid: {}, BestAsk: {}", 
+                  orderbook.symbol, orderbook.bids.size(), orderbook.asks.size(), 
+                  orderbook.best_bid(), orderbook.best_ask());
+    
+    WebSocketEvent evt(WebSocketEvent::Type::OrderBook, Exchange::Upbit, orderbook);
     
     emit_event(std::move(evt));
 }
 
 void UpbitWebSocket::parse_trade(const nlohmann::json& data) {
-    // Trade 이벤트는 현재 사용하지 않으므로 구현 생략
-    // 필요시 추가 구현
+    Ticker trade;
+    trade.exchange = Exchange::Upbit;
+    
+    // 심볼
+    trade.symbol = data["code"];
+    
+    // 체결가
+    trade.price = data["trade_price"];
+    
+    // Upbit trade에는 bid/ask 정보가 없으므로 체결가로 설정
+    trade.bid = trade.price;
+    trade.ask = trade.price;
+    
+    // 체결량
+    trade.volume_24h = data["trade_volume"];
+    
+    // 타임스탬프
+    int64_t timestamp_ms = data["trade_timestamp"];
+    trade.timestamp = std::chrono::system_clock::time_point(
+        std::chrono::milliseconds(timestamp_ms)
+    );
+    
+    WebSocketEvent evt(WebSocketEvent::Type::Trade, Exchange::Upbit, trade);
+    
+    emit_event(std::move(evt));
 }
 
 }  // namespace arbitrage

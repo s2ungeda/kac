@@ -96,11 +96,27 @@ void WebSocketClientBase::on_ssl_handshake(beast::error_code ec) {
     
     // WebSocket handshake
     ws_.set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
-    ws_.set_option(websocket::stream_base::decorator(
-        [](websocket::request_type& req) {
-            req.set(boost::beast::http::field::user_agent, 
-                   "kimchi-arbitrage-cpp/1.0");
-        }));
+    
+    // MEXC는 브라우저처럼 보이도록 특별한 헤더 설정
+    if (exchange_ == Exchange::MEXC) {
+        ws_.set_option(websocket::stream_base::decorator(
+            [this](websocket::request_type& req) {
+                req.set(boost::beast::http::field::user_agent, 
+                       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+                req.set(boost::beast::http::field::origin, "https://www.mexc.com");
+                req.set(boost::beast::http::field::sec_websocket_extensions, "permessage-deflate; client_max_window_bits");
+                req.set("Sec-WebSocket-Version", "13");
+                req.set("Accept-Language", "en-US,en;q=0.9");
+                req.set("Cache-Control", "no-cache");
+                req.set("Pragma", "no-cache");
+            }));
+    } else {
+        ws_.set_option(websocket::stream_base::decorator(
+            [](websocket::request_type& req) {
+                req.set(boost::beast::http::field::user_agent, 
+                       "kimchi-arbitrage-cpp/1.0");
+            }));
+    }
     
     ws_.async_handshake(host_, target_,
         beast::bind_front_handler(
@@ -125,13 +141,11 @@ void WebSocketClientBase::on_handshake(beast::error_code ec) {
     logger_->info("[{}] WebSocket connected", exchange_name(exchange_));
     
     // Connected 이벤트 발행
-    WebSocketEvent evt{
-        WebSocketEvent::Type::Connected,
-        exchange_,
-        {},
-        ""
-    };
+    WebSocketEvent evt(WebSocketEvent::Type::Connected, exchange_);
     emit_event(std::move(evt));
+    
+    // 파생 클래스의 on_connected 호출
+    on_connected();
     
     // 구독 메시지 전송
     std::string subscribe_msg = build_subscribe_message();
@@ -273,12 +287,7 @@ void WebSocketClientBase::on_close(beast::error_code ec) {
     connected_ = false;
     
     // Disconnected 이벤트 발행
-    WebSocketEvent evt{
-        WebSocketEvent::Type::Disconnected,
-        exchange_,
-        {},
-        ""
-    };
+    WebSocketEvent evt(WebSocketEvent::Type::Disconnected, exchange_);
     emit_event(std::move(evt));
 }
 
@@ -289,12 +298,8 @@ void WebSocketClientBase::fail(beast::error_code ec, char const* what) {
     connected_ = false;
     
     // Error 이벤트 발행
-    WebSocketEvent evt{
-        WebSocketEvent::Type::Error,
-        exchange_,
-        {},
-        std::string(what) + ": " + ec.message()
-    };
+    WebSocketEvent evt(WebSocketEvent::Type::Error, exchange_, 
+                      std::string(what) + ": " + ec.message());
     emit_event(std::move(evt));
     
     // 재연결 스케줄링
@@ -334,15 +339,15 @@ void WebSocketClientBase::on_reconnect_timer(beast::error_code ec) {
 }
 
 void WebSocketClientBase::emit_event(WebSocketEvent&& evt) {
+    // 콜백 호출 (옵션) - move 전에 호출해야 함
+    if (event_callback_) {
+        event_callback_(evt);
+    }
+    
     // Lock-Free Queue에 추가
     if (!event_queue_.push(std::move(evt))) {
         logger_->warn("[{}] Event queue full, dropping event",
                       exchange_name(exchange_));
-    }
-    
-    // 콜백 호출 (옵션)
-    if (event_callback_) {
-        event_callback_(evt);
     }
 }
 

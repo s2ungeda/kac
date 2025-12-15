@@ -16,6 +16,9 @@ public:
     void subscribe_orderbook(const std::vector<std::string>& symbols);
     void subscribe_trade(const std::vector<std::string>& symbols);
     
+    // MEXC는 다른 엔드포인트 사용
+    void connect_orderbook(const std::string& host, const std::string& port, const std::string& path);
+    
 protected:
     // WebSocketClientBase 구현
     std::string build_subscribe_message() override;
@@ -37,6 +40,10 @@ private:
     
     // 구독 ID
     int subscribe_id_{1};
+    
+    // 지연된 구독을 위한 타이머
+    void on_connected() override;
+    void send_delayed_subscriptions();
 };
 
 }  // namespace arbitrage

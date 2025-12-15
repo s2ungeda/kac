@@ -1,6 +1,8 @@
 #include "arbitrage/exchange/mexc/websocket.hpp"
 #include "arbitrage/common/json.hpp"
 #include <chrono>
+#include <algorithm>
+#include <cctype>
 
 namespace arbitrage {
 
@@ -20,92 +22,89 @@ void MEXCWebSocket::subscribe_trade(const std::vector<std::string>& symbols) {
     trade_symbols_ = symbols;
 }
 
+void MEXCWebSocket::on_connected() {
+    // MEXC는 연결 후 즉시 첫 구독 전송
+    logger_->info("[MEXC] Connected, starting subscriptions...");
+    send_delayed_subscriptions();
+}
+
 std::string MEXCWebSocket::build_subscribe_message() {
-    nlohmann::json messages = nlohmann::json::array();
-    
-    // 시세 구독 (deals - 체결 정보로 대체)
-    for (const auto& symbol : ticker_symbols_) {
-        messages.push_back({
-            {"method", "SUBSCRIPTION"},
-            {"params", nlohmann::json::array({
-                "spot@public.deals.v3.api@" + symbol
-            })},
-            {"id", subscribe_id_++}
-        });
-    }
-    
-    // 호가 구독
-    for (const auto& symbol : orderbook_symbols_) {
-        messages.push_back({
-            {"method", "SUBSCRIPTION"},
-            {"params", nlohmann::json::array({
-                "spot@public.limit.depth.v3.api@" + symbol + "@20"
-            })},
-            {"id", subscribe_id_++}
-        });
-    }
-    
-    // 체결 구독
-    for (const auto& symbol : trade_symbols_) {
-        messages.push_back({
-            {"method", "SUBSCRIPTION"},
-            {"params", nlohmann::json::array({
-                "spot@public.deals.v3.api@" + symbol
-            })},
-            {"id", subscribe_id_++}
-        });
-    }
-    
-    // MEXC는 각 구독을 별도로 전송
-    if (!messages.empty()) {
-        return messages[0].dump();  // 첫 번째만 반환, 나머지는 연결 후 전송
-    }
-    
+    // MEXC는 on_connected에서 처리하므로 여기서는 빈 문자열 반환
     return "";
+}
+
+void MEXCWebSocket::send_delayed_subscriptions() {
+    // 하나의 구독만 전송
+    nlohmann::json sub_msg;
+    
+    static size_t ticker_idx = 0;
+    static size_t trade_idx = 0;
+    static bool ticker_done = false;
+    static bool trade_done = false;
+    
+    if (!ticker_done && ticker_idx < ticker_symbols_.size()) {
+        // MEXC는 소문자 심볼을 요구할 수 있음
+        std::string symbol = ticker_symbols_[ticker_idx];
+        std::transform(symbol.begin(), symbol.end(), symbol.begin(), ::tolower);
+        
+        sub_msg = {
+            {"method", "SUBSCRIPTION"},
+            {"params", nlohmann::json::array({
+                "spot@public.ticker.v3.api@" + symbol
+            })},
+            {"id", subscribe_id_++}
+        };
+        ticker_idx++;
+        if (ticker_idx >= ticker_symbols_.size()) ticker_done = true;
+    } else if (!trade_done && trade_idx < trade_symbols_.size()) {
+        // MEXC는 소문자 심볼을 요구할 수 있음
+        std::string symbol = trade_symbols_[trade_idx];
+        std::transform(symbol.begin(), symbol.end(), symbol.begin(), ::tolower);
+        
+        sub_msg = {
+            {"method", "SUBSCRIPTION"},
+            {"params", nlohmann::json::array({
+                "spot@public.deals.v3.api@" + symbol
+            })},
+            {"id", subscribe_id_++}
+        };
+        trade_idx++;
+        if (trade_idx >= trade_symbols_.size()) trade_done = true;
+    }
+    
+    if (!sub_msg.empty()) {
+        logger_->info("[MEXC] Sending subscription for channel");
+        send_message(sub_msg.dump());
+    }
 }
 
 void MEXCWebSocket::parse_message(const std::string& message) {
     try {
         auto json = nlohmann::json::parse(message);
         
-        // 모든 메시지 디버깅
-        logger_->debug("[MEXC] Received message: {}", json.dump());
+        // 모든 메시지 디버깅 - 제거됨
         
         // 구독 응답 처리
-        if (json.contains("code") && json["code"] == 0) {
-            logger_->debug("[MEXC] Subscription successful");
-            
-            // 나머지 구독 메시지 전송
-            nlohmann::json messages = nlohmann::json::array();
-            
-            // 위에서 첫 번째만 전송했으므로 나머지 전송
-            for (size_t i = 1; i < ticker_symbols_.size(); ++i) {
-                send_message(nlohmann::json({
-                    {"method", "SUBSCRIPTION"},
-                    {"params", nlohmann::json::array({
-                        "spot@public.deals.v3.api@" + ticker_symbols_[i]
-                    })},
-                    {"id", subscribe_id_++}
-                }).dump());
+        if (json.contains("code")) {
+            if (json.contains("msg")) {
+                std::string msg = json["msg"];
+                if (msg.find("Not Subscribed successfully") != std::string::npos) {
+                    logger_->warn("[MEXC] Subscription failed: {}", msg);
+                    // 실패해도 다음 구독 시도
+                    send_delayed_subscriptions();
+                } else {
+                    logger_->info("[MEXC] Subscription response: {}", msg);
+                    // 성공 시 다음 구독 전송
+                    send_delayed_subscriptions();
+                }
             }
-            
-            for (const auto& symbol : orderbook_symbols_) {
-                send_message(nlohmann::json({
-                    {"method", "SUBSCRIPTION"},
-                    {"params", nlohmann::json::array({
-                        "spot@public.limit.depth.v3.api@" + symbol + "@20"
-                    })},
-                    {"id", subscribe_id_++}
-                }).dump());
-            }
-            
             return;
         }
         
         // Ping 응답 처리
         if (json.contains("ping")) {
             send_message("{\"pong\":" + std::to_string(json["ping"].get<int64_t>()) + "}");
-            logger_->debug("[MEXC] Sent pong response");
+            // Pong sent
             return;
         }
         
@@ -114,9 +113,9 @@ void MEXCWebSocket::parse_message(const std::string& message) {
             std::string channel = json["c"];
             auto data = json["d"];
             
-            logger_->debug("[MEXC] Data channel: {}", channel);
+            // Data channel received
             
-            if (channel.find("deals") != std::string::npos) {
+            if (channel.find("ticker") != std::string::npos) {
                 parse_ticker(data);
             } else if (channel.find("depth") != std::string::npos) {
                 parse_orderbook(data);
@@ -134,21 +133,34 @@ void MEXCWebSocket::parse_ticker(const nlohmann::json& data) {
     Ticker ticker;
     ticker.exchange = Exchange::MEXC;
     
-    // deals 데이터의 경우, 배열로 옴
-    if (data.contains("deals") && data["deals"].is_array() && !data["deals"].empty()) {
-        auto& deal = data["deals"][0];  // 가장 최근 체결
-        ticker.symbol = data["symbol"];  
-        ticker.price = std::stod(deal["p"].get<std::string>());  // 체결가
+    // ticker 데이터 형식
+    try {
+        // 심볼
+        if (data.contains("s")) {
+            ticker.symbol = data["s"];
+        }
         
-        // bid/ask는 체결 데이터에서 얻을 수 없으므로 price로 대체
-        ticker.bid = ticker.price;
-        ticker.ask = ticker.price;
+        // 현재가 (최종 체결가)
+        if (data.contains("c")) {
+            ticker.price = std::stod(data["c"].get<std::string>());
+        }
         
-        ticker.volume_24h = 0;  // deals에서는 24시간 거래량 제공 안함
+        // 매수/매도 호가
+        if (data.contains("b")) {
+            ticker.bid = std::stod(data["b"].get<std::string>());  // Best bid price
+        }
+        if (data.contains("a")) {
+            ticker.ask = std::stod(data["a"].get<std::string>());  // Best ask price
+        }
+        
+        // 24시간 거래량
+        if (data.contains("v")) {
+            ticker.volume_24h = std::stod(data["v"].get<std::string>());
+        }
         
         // 타임스탬프
-        if (deal.contains("t")) {
-            int64_t timestamp_ms = deal["t"];
+        if (data.contains("t")) {
+            int64_t timestamp_ms = data["t"];
             ticker.timestamp = std::chrono::system_clock::time_point(
                 std::chrono::milliseconds(timestamp_ms)
             );
@@ -156,14 +168,14 @@ void MEXCWebSocket::parse_ticker(const nlohmann::json& data) {
             ticker.timestamp = std::chrono::system_clock::now();
         }
         
-        WebSocketEvent evt{
-            WebSocketEvent::Type::Ticker,
-            Exchange::MEXC,
-            ticker,
-            ""
-        };
+        logger_->info("[MEXC] Ticker parsed - Symbol: {}, Price: {}, Bid: {}, Ask: {}", 
+                     ticker.symbol, ticker.price, ticker.bid, ticker.ask);
+        
+        WebSocketEvent evt(WebSocketEvent::Type::Ticker, Exchange::MEXC, ticker);
         
         emit_event(std::move(evt));
+    } catch (const std::exception& e) {
+        logger_->error("[MEXC] Error parsing ticker: {}", e.what());
     }
 }
 
@@ -206,18 +218,56 @@ void MEXCWebSocket::parse_orderbook(const nlohmann::json& data) {
         orderbook.timestamp = std::chrono::system_clock::now();
     }
     
-    WebSocketEvent evt{
-        WebSocketEvent::Type::OrderBook,
-        Exchange::MEXC,
-        orderbook,
-        ""
-    };
+    // OrderBook 파싱 결과 출력
+    if (!orderbook.bids.empty() && !orderbook.asks.empty()) {
+        logger_->info("[MEXC] OrderBook parsed - Symbol: {}, Best Bid: {}, Best Ask: {}",
+                     orderbook.symbol, orderbook.bids[0].price, orderbook.asks[0].price);
+    }
+    
+    WebSocketEvent evt(WebSocketEvent::Type::OrderBook, Exchange::MEXC, orderbook);
     
     emit_event(std::move(evt));
 }
 
 void MEXCWebSocket::parse_trade(const nlohmann::json& data) {
-    // Trade 이벤트는 현재 사용하지 않으므로 구현 생략
+    // MEXC는 deals 데이터를 배열로 제공
+    if (data.contains("deals") && data["deals"].is_array() && !data["deals"].empty()) {
+        for (const auto& deal : data["deals"]) {
+            Ticker trade;
+            trade.exchange = Exchange::MEXC;
+            
+            // 심볼
+            if (data.contains("symbol")) {
+                trade.symbol = data["symbol"];
+            }
+            
+            // 체결가
+            trade.price = std::stod(deal["p"].get<std::string>());
+            
+            // MEXC trade에는 bid/ask 정보가 없으므로 체결가로 설정
+            trade.bid = trade.price;
+            trade.ask = trade.price;
+            
+            // 체결량
+            trade.volume_24h = std::stod(deal["v"].get<std::string>());
+            
+            // 타임스탬프
+            if (deal.contains("t")) {
+                int64_t timestamp_ms = deal["t"];
+                trade.timestamp = std::chrono::system_clock::time_point(
+                    std::chrono::milliseconds(timestamp_ms)
+                );
+            } else {
+                trade.timestamp = std::chrono::system_clock::now();
+            }
+            
+            logger_->info("[MEXC] Trade parsed - Symbol: {}, Price: {}, Volume: {}",
+                         trade.symbol, trade.price, trade.volume_24h);
+            
+            WebSocketEvent evt(WebSocketEvent::Type::Trade, Exchange::MEXC, trade);
+            emit_event(std::move(evt));
+        }
+    }
 }
 
 }  // namespace arbitrage

@@ -41,6 +41,21 @@ struct WebSocketEvent {
     std::variant<Ticker, OrderBook> data;
     std::string error_message;
     
+    // 생성자들
+    WebSocketEvent() = default;
+    
+    // Ticker 이벤트 생성자
+    WebSocketEvent(Type t, Exchange ex, const Ticker& tick, const std::string& err = "")
+        : type(t), exchange(ex), data(tick), error_message(err) {}
+    
+    // OrderBook 이벤트 생성자    
+    WebSocketEvent(Type t, Exchange ex, const OrderBook& ob, const std::string& err = "")
+        : type(t), exchange(ex), data(ob), error_message(err) {}
+    
+    // Error/기타 이벤트 생성자
+    WebSocketEvent(Type t, Exchange ex, const std::string& err = "")
+        : type(t), exchange(ex), error_message(err) {}
+    
     // 편의 함수
     bool is_ticker() const { return type == Type::Ticker; }
     bool is_orderbook() const { return type == Type::OrderBook; }
@@ -87,6 +102,7 @@ protected:
     virtual std::chrono::seconds ping_interval() const { 
         return std::chrono::seconds(30); 
     }
+    virtual void on_connected() {}
     
     // 이벤트 발행 (파생 클래스에서 호출)
     void emit_event(WebSocketEvent&& evt);

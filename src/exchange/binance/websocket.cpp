@@ -118,12 +118,7 @@ void BinanceWebSocket::parse_ticker(const nlohmann::json& data) {
         std::chrono::milliseconds(timestamp_ms)
     );
     
-    WebSocketEvent evt{
-        WebSocketEvent::Type::Ticker,
-        Exchange::Binance,
-        ticker,
-        ""
-    };
+    WebSocketEvent evt(WebSocketEvent::Type::Ticker, Exchange::Binance, ticker);
     
     emit_event(std::move(evt));
 }
@@ -167,18 +162,38 @@ void BinanceWebSocket::parse_orderbook(const nlohmann::json& data) {
         orderbook.timestamp = std::chrono::system_clock::now();
     }
     
-    WebSocketEvent evt{
-        WebSocketEvent::Type::OrderBook,
-        Exchange::Binance,
-        orderbook,
-        ""
-    };
+    WebSocketEvent evt(WebSocketEvent::Type::OrderBook, Exchange::Binance, orderbook);
     
     emit_event(std::move(evt));
 }
 
 void BinanceWebSocket::parse_trade(const nlohmann::json& data) {
-    // Trade 이벤트는 현재 사용하지 않으므로 구현 생략
+    Ticker trade;
+    trade.exchange = Exchange::Binance;
+    
+    // 심볼 (대문자 변환)
+    std::string symbol = data["s"];
+    trade.symbol = symbol;
+    
+    // 체결가
+    trade.price = std::stod(data["p"].get<std::string>());
+    
+    // Binance trade에는 bid/ask 정보가 없으므로 체결가로 설정
+    trade.bid = trade.price;
+    trade.ask = trade.price;
+    
+    // 체결량
+    trade.volume_24h = std::stod(data["q"].get<std::string>());
+    
+    // 타임스탬프
+    int64_t timestamp_ms = data["T"];
+    trade.timestamp = std::chrono::system_clock::time_point(
+        std::chrono::milliseconds(timestamp_ms)
+    );
+    
+    WebSocketEvent evt(WebSocketEvent::Type::Trade, Exchange::Binance, trade);
+    
+    emit_event(std::move(evt));
 }
 
 }  // namespace arbitrage
