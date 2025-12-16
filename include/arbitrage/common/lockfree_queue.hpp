@@ -1,89 +1,118 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
+#include <cstdlib>
 #include <memory>
-#include <vector>
-#include <optional>
+#include <new>
+#include <stdexcept>
+#include <type_traits>
 
 namespace arbitrage {
 
-// Single Producer Single Consumer Lock-Free Queue
-template<typename T>
-class LockFreeQueue {
+// Cache line padding
+constexpr std::size_t CACHE_LINE_SIZE = 64;
+
+// SPSC Lock-Free Queue (Single Producer Single Consumer)
+template <typename T>
+class SPSCQueue {
 public:
-    explicit LockFreeQueue(size_t capacity) 
+    explicit SPSCQueue(size_t capacity)
         : capacity_(capacity)
-        , buffer_(capacity)
-        , head_(0)
-        , tail_(0) {}
+        , mask_(capacity - 1)
+        , buffer_(static_cast<T*>(std::aligned_alloc(alignof(T), sizeof(T) * capacity)))
+    {
+        // capacity는 2의 거듭제곱
+        if ((capacity & (capacity - 1)) != 0) {
+            throw std::invalid_argument("Capacity must be power of 2");
+        }
+        
+        // 생성된 객체들을 위한 공간 초기화
+        for (size_t i = 0; i < capacity; ++i) {
+            new (&buffer_[i]) T();
+        }
+    }
     
-    // Producer 스레드에서 호출
+    ~SPSCQueue() {
+        // 남은 요소들 정리
+        while (!empty()) { 
+            T item; 
+            pop(item); 
+        }
+        
+        // 모든 객체 소멸자 호출
+        for (size_t i = 0; i < capacity_; ++i) {
+            buffer_[i].~T();
+        }
+        
+        std::free(buffer_);
+    }
+    
+    // Producer: 요소 추가
     bool push(const T& item) {
-        const size_t current_tail = tail_.load(std::memory_order_relaxed);
-        const size_t next_tail = (current_tail + 1) % capacity_;
+        const size_t head = head_.load(std::memory_order_relaxed);
+        const size_t next = (head + 1) & mask_;
         
-        if (next_tail == head_.load(std::memory_order_acquire)) {
-            // 큐가 가득 참
-            return false;
+        if (next == tail_.load(std::memory_order_acquire)) {
+            return false;  // Full
         }
         
-        buffer_[current_tail] = item;
-        tail_.store(next_tail, std::memory_order_release);
+        buffer_[head] = item;
+        head_.store(next, std::memory_order_release);
         return true;
     }
     
+    // Producer: 요소 추가 (move)
     bool push(T&& item) {
-        const size_t current_tail = tail_.load(std::memory_order_relaxed);
-        const size_t next_tail = (current_tail + 1) % capacity_;
+        const size_t head = head_.load(std::memory_order_relaxed);
+        const size_t next = (head + 1) & mask_;
         
-        if (next_tail == head_.load(std::memory_order_acquire)) {
-            // 큐가 가득 참
-            return false;
+        if (next == tail_.load(std::memory_order_acquire)) {
+            return false;  // Full
         }
         
-        buffer_[current_tail] = std::move(item);
-        tail_.store(next_tail, std::memory_order_release);
+        buffer_[head] = std::move(item);
+        head_.store(next, std::memory_order_release);
         return true;
     }
     
-    // Consumer 스레드에서 호출
-    std::optional<T> pop() {
-        const size_t current_head = head_.load(std::memory_order_relaxed);
+    // Consumer: 요소 추출
+    bool pop(T& item) {
+        const size_t tail = tail_.load(std::memory_order_relaxed);
         
-        if (current_head == tail_.load(std::memory_order_acquire)) {
-            // 큐가 비어 있음
-            return std::nullopt;
+        if (tail == head_.load(std::memory_order_acquire)) {
+            return false;  // Empty
         }
         
-        T item = std::move(buffer_[current_head]);
-        head_.store((current_head + 1) % capacity_, std::memory_order_release);
-        return item;
-    }
-    
-    // 큐 크기 (대략적인 값)
-    size_t size() const {
-        const size_t current_head = head_.load(std::memory_order_relaxed);
-        const size_t current_tail = tail_.load(std::memory_order_relaxed);
-        
-        if (current_tail >= current_head) {
-            return current_tail - current_head;
-        } else {
-            return capacity_ - current_head + current_tail;
-        }
+        item = std::move(buffer_[tail]);
+        tail_.store((tail + 1) & mask_, std::memory_order_release);
+        return true;
     }
     
     bool empty() const {
-        return head_.load(std::memory_order_relaxed) == 
-               tail_.load(std::memory_order_relaxed);
+        return head_.load(std::memory_order_acquire) == 
+               tail_.load(std::memory_order_acquire);
     }
     
-    size_t capacity() const { return capacity_ - 1; } // 실제 사용 가능한 크기
-
+    // 대략적인 크기 (정확하지 않을 수 있음)
+    size_t size_approx() const {
+        const size_t head = head_.load(std::memory_order_acquire);
+        const size_t tail = tail_.load(std::memory_order_acquire);
+        return (head - tail) & mask_;
+    }
+    
 private:
     const size_t capacity_;
-    std::vector<T> buffer_;
-    alignas(64) std::atomic<size_t> head_;  // Consumer 소유
-    alignas(64) std::atomic<size_t> tail_;  // Producer 소유
+    const size_t mask_;
+    T* const buffer_;
+    
+    // False sharing 방지를 위한 cache line padding
+    alignas(CACHE_LINE_SIZE) std::atomic<size_t> head_{0};
+    alignas(CACHE_LINE_SIZE) std::atomic<size_t> tail_{0};
 };
+
+// 편의를 위한 별칭
+template <typename T>
+using LockFreeQueue = SPSCQueue<T>;
 
 }  // namespace arbitrage

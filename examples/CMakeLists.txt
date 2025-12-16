@@ -77,3 +77,25 @@ endif()
 if(CURL_FOUND)
     target_link_libraries(premium_example PRIVATE ${CURL_LIBRARIES})
 endif()
+
+# Test MEXC
+add_executable(test_mexc ${CMAKE_SOURCE_DIR}/test_mexc.cpp)
+target_link_libraries(test_mexc
+    PRIVATE
+        common
+        exchange_websocket
+        Threads::Threads
+        ${Boost_LIBRARIES}
+        OpenSSL::SSL 
+        OpenSSL::Crypto
+)
+
+# Test Simple MEXC
+add_executable(test_simple_mexc ${CMAKE_SOURCE_DIR}/test_simple_mexc.cpp)
+target_link_libraries(test_simple_mexc
+    PRIVATE
+        ${Boost_LIBRARIES}
+        OpenSSL::SSL 
+        OpenSSL::Crypto
+        Threads::Threads
+)

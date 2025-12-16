@@ -31,6 +31,7 @@ enum class ErrorCode {
     ConfigError = 301,
     ParseError = 302,
     InvalidState = 303,
+    NotImplemented = 304,
     
     // 비즈니스 에러 (400-499)
     BusinessError = 400,

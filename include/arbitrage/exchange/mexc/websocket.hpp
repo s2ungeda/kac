@@ -33,6 +33,11 @@ private:
     void parse_orderbook(const nlohmann::json& data);
     void parse_trade(const nlohmann::json& data);
     
+    // Protobuf parsing
+    void parse_ticker_protobuf(const std::string& data);
+    void parse_orderbook_protobuf(const std::string& data, const std::string& symbol);
+    void parse_trade_protobuf(const std::string& data, const std::string& symbol);
+    
     // 구독 정보
     std::vector<std::string> ticker_symbols_;
     std::vector<std::string> orderbook_symbols_;
@@ -44,6 +49,14 @@ private:
     // 지연된 구독을 위한 타이머
     void on_connected() override;
     void send_delayed_subscriptions();
+    
+    // 구독 상태 추적
+    size_t ticker_idx_{0};
+    size_t orderbook_idx_{0};
+    size_t trade_idx_{0};
+    bool ticker_done_{false};
+    bool orderbook_done_{false};
+    bool trade_done_{false};
 };
 
 }  // namespace arbitrage

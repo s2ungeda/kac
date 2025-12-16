@@ -166,7 +166,7 @@ int main() {
     upbit_ws->connect("api.upbit.com", "443", "/websocket/v1");
     binance_ws->connect("stream.binance.com", "9443", "/stream?streams=xrpusdt@ticker");
     bithumb_ws->connect("pubwss.bithumb.com", "443", "/pub/ws");
-    mexc_ws->connect("wbs.mexc.com", "443", "/ws");
+    mexc_ws->connect("wbs-api.mexc.com", "443", "/ws");
     
     // IO 스레드 시작
     std::thread io_thread([&ioc]() {

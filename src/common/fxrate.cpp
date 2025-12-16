@@ -8,7 +8,7 @@
 namespace arbitrage {
 
 FXRateService::FXRateService()
-    : logger_(nullptr) {  // TODO: Logger 설정
+    : logger_(Logger::create("FXRate")) {
 }
 
 FXRateService::~FXRateService() {

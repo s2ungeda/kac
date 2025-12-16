@@ -19,15 +19,15 @@ std::unique_ptr<OrderClientBase> create_order_client(
             return std::make_unique<BinanceOrderClient>(api_key, secret_key);
             
         case Exchange::Bithumb:
-            // return std::make_unique<BithumbOrderClient>(api_key, secret_key);
-            return nullptr;  // TODO
+            // TODO: Bithumb order client implementation
+            throw std::runtime_error("Bithumb order client not implemented");
             
         case Exchange::MEXC:
-            // return std::make_unique<MEXCOrderClient>(api_key, secret_key);
-            return nullptr;  // TODO
+            // TODO: MEXC order client implementation
+            throw std::runtime_error("MEXC order client not implemented");
             
         default:
-            return nullptr;
+            throw std::runtime_error("Unknown exchange");
     }
 }
 

@@ -152,11 +152,11 @@ Result<OrderResult> UpbitOrderClient::cancel_order(const std::string& order_id) 
         );
     }
     
-    OrderResult result;
-    result.order_id = order_id;
-    result.status = OrderStatus::Canceled;
-    
-    return Ok(std::move(result));
+    // TODO: 응답 파싱
+    return Err<OrderResult>(
+        ErrorCode::NotImplemented,
+        "Response parsing not implemented"
+    );
 }
 
 Result<OrderResult> UpbitOrderClient::get_order(const std::string& order_id) {
@@ -175,11 +175,10 @@ Result<OrderResult> UpbitOrderClient::get_order(const std::string& order_id) {
     }
     
     // TODO: 응답 파싱
-    OrderResult result;
-    result.order_id = order_id;
-    result.status = OrderStatus::Open;
-    
-    return Ok(std::move(result));
+    return Err<OrderResult>(
+        ErrorCode::NotImplemented,
+        "Response parsing not implemented"
+    );
 }
 
 Result<Balance> UpbitOrderClient::get_balance(const std::string& currency) {
@@ -197,12 +196,10 @@ Result<Balance> UpbitOrderClient::get_balance(const std::string& currency) {
     }
     
     // TODO: 응답 파싱
-    Balance balance;
-    balance.currency = currency;
-    balance.available = 0.0;
-    balance.locked = 0.0;
-    
-    return Ok(std::move(balance));
+    return Err<Balance>(
+        ErrorCode::NotImplemented,
+        "Response parsing not implemented"
+    );
 }
 
 }  // namespace arbitrage

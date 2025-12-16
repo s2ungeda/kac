@@ -71,7 +71,7 @@ private:
     // 캐시 유효 기간
     static constexpr auto CACHE_TTL = std::chrono::seconds(60);
     
-    class Logger* logger_;
+    std::shared_ptr<class SimpleLogger> logger_;
 };
 
 }  // namespace arbitrage

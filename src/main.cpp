@@ -43,11 +43,6 @@ int main(int argc, char* argv[]) {
     
     // 메인 루프 (Busy wait)
     while (g_running) {
-        // TODO: 여기에 실제 로직 추가
-        // - 이벤트 큐 처리
-        // - 아비트라지 기회 계산
-        // - 주문 실행 등
-        
         // CPU에 힌트 제공 (spin-wait 최적화)
         __builtin_ia32_pause();
     }

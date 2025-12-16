@@ -32,7 +32,7 @@ protected:
 private:
     // 메시지 파서
     void parse_ticker(const nlohmann::json& data);
-    void parse_orderbook(const nlohmann::json& data);
+    void parse_orderbook(const nlohmann::json& data, const std::string& stream_symbol = "");
     void parse_trade(const nlohmann::json& data);
     
     // 스트림 목록

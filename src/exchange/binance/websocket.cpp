@@ -77,10 +77,18 @@ void BinanceWebSocket::parse_message(const std::string& message) {
             std::string stream = json["stream"];
             auto data = json["data"];
             
+            // 스트림 이름에서 심볼 추출 (예: "btcusdt@depth" -> "BTCUSDT")
+            std::string symbol;
+            size_t at_pos = stream.find('@');
+            if (at_pos != std::string::npos) {
+                symbol = stream.substr(0, at_pos);
+                std::transform(symbol.begin(), symbol.end(), symbol.begin(), ::toupper);
+            }
+            
             if (stream.find("@ticker") != std::string::npos) {
                 parse_ticker(data);
             } else if (stream.find("@depth") != std::string::npos) {
-                parse_orderbook(data);
+                parse_orderbook(data, symbol);
             } else if (stream.find("@trade") != std::string::npos) {
                 parse_trade(data);
             }
@@ -92,7 +100,7 @@ void BinanceWebSocket::parse_message(const std::string& message) {
             if (event_type == "24hrTicker") {
                 parse_ticker(json);
             } else if (event_type == "depthUpdate") {
-                parse_orderbook(json);
+                parse_orderbook(json, "");
             } else if (event_type == "trade") {
                 parse_trade(json);
             }
@@ -123,13 +131,15 @@ void BinanceWebSocket::parse_ticker(const nlohmann::json& data) {
     emit_event(std::move(evt));
 }
 
-void BinanceWebSocket::parse_orderbook(const nlohmann::json& data) {
+void BinanceWebSocket::parse_orderbook(const nlohmann::json& data, const std::string& stream_symbol) {
     OrderBook orderbook;
     orderbook.exchange = Exchange::Binance;
     
     // 심볼 추출 (depthUpdate 이벤트에는 's' 필드가 없을 수 있음)
     if (data.contains("s")) {
         orderbook.symbol = data["s"];
+    } else if (!stream_symbol.empty()) {
+        orderbook.symbol = stream_symbol;
     }
     
     // Bids (매수 호가)

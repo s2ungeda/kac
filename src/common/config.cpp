@@ -176,7 +176,7 @@ bool Config::load(const std::string& path) {
     
     ExchangeConfig mexc_cfg;
     mexc_cfg.enabled = true;
-    mexc_cfg.ws_url = "wss://wbs.mexc.com/ws";
+    mexc_cfg.ws_url = "wss://wbs-api.mexc.com/ws";
     mexc_cfg.rest_url = "https://api.mexc.com";
     exchanges_[Exchange::MEXC] = mexc_cfg;
     

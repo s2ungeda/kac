@@ -26,10 +26,14 @@ void WebSocketClientBase::connect(const std::string& host, const std::string& po
     port_ = port;
     target_ = target;
     
-    logger_->info("[{}] Connecting to {}:{}{}",
-                  exchange_name(exchange_), host, port, target);
+    logger_->debug("[{}] Connecting to {}:{}{}",
+                   exchange_name(exchange_), host, port, target);
+    
+    // 연결 상태 초기화
+    connected_ = false;
     
     // DNS 조회
+    logger_->debug("[{}] Starting DNS lookup for {}", exchange_name(exchange_), host);
     resolver_.async_resolve(
         host, port,
         beast::bind_front_handler(
@@ -53,8 +57,13 @@ void WebSocketClientBase::disconnect() {
 
 void WebSocketClientBase::on_resolve(beast::error_code ec, tcp::resolver::results_type results) {
     if (ec) {
+        logger_->error("[{}] DNS resolve failed for {}: {}", 
+                       exchange_name(exchange_), host_, ec.message());
         return fail(ec, "resolve");
     }
+    
+    logger_->debug("[{}] DNS resolved {} to {} endpoints", 
+                   exchange_name(exchange_), host_, results.size());
     
     // TCP 타임아웃 설정
     beast::get_lowest_layer(ws_).expires_after(std::chrono::seconds(30));
@@ -69,14 +78,19 @@ void WebSocketClientBase::on_resolve(beast::error_code ec, tcp::resolver::result
 
 void WebSocketClientBase::on_connect(beast::error_code ec, tcp::resolver::results_type::endpoint_type ep) {
     if (ec) {
+        logger_->error("[{}] TCP connect failed: {} ({})", 
+                       exchange_name(exchange_), ec.message(), ep.address().to_string());
         return fail(ec, "connect");
     }
+    
+    logger_->debug("[{}] TCP connected to {}", exchange_name(exchange_), ep.address().to_string());
     
     // SSL handshake
     beast::get_lowest_layer(ws_).expires_never();
     
     // MEXC와 Bithumb을 위한 SNI 설정
     if (exchange_ == Exchange::MEXC || exchange_ == Exchange::Bithumb) {
+        logger_->debug("[{}] Setting SNI hostname: {}", exchange_name(exchange_), host_);
         if (!SSL_set_tlsext_host_name(ws_.next_layer().native_handle(), host_.c_str())) {
             logger_->error("[{}] Failed to set SNI hostname", exchange_name(exchange_));
         }
@@ -91,32 +105,22 @@ void WebSocketClientBase::on_connect(beast::error_code ec, tcp::resolver::result
 
 void WebSocketClientBase::on_ssl_handshake(beast::error_code ec) {
     if (ec) {
+        logger_->error("[{}] SSL handshake failed: {} (category: {})", 
+                       exchange_name(exchange_), ec.message(), ec.category().name());
         return fail(ec, "ssl_handshake");
     }
+    
+    logger_->debug("[{}] SSL handshake completed", exchange_name(exchange_));
     
     // WebSocket handshake
     ws_.set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
     
-    // MEXC는 브라우저처럼 보이도록 특별한 헤더 설정
-    if (exchange_ == Exchange::MEXC) {
-        ws_.set_option(websocket::stream_base::decorator(
-            [this](websocket::request_type& req) {
-                req.set(boost::beast::http::field::user_agent, 
-                       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-                req.set(boost::beast::http::field::origin, "https://www.mexc.com");
-                req.set(boost::beast::http::field::sec_websocket_extensions, "permessage-deflate; client_max_window_bits");
-                req.set("Sec-WebSocket-Version", "13");
-                req.set("Accept-Language", "en-US,en;q=0.9");
-                req.set("Cache-Control", "no-cache");
-                req.set("Pragma", "no-cache");
-            }));
-    } else {
-        ws_.set_option(websocket::stream_base::decorator(
-            [](websocket::request_type& req) {
-                req.set(boost::beast::http::field::user_agent, 
-                       "kimchi-arbitrage-cpp/1.0");
-            }));
-    }
+    // 기본 User-Agent만 설정
+    ws_.set_option(websocket::stream_base::decorator(
+        [](websocket::request_type& req) {
+            req.set(boost::beast::http::field::user_agent, 
+                   "kimchi-arbitrage-cpp/1.0");
+        }));
     
     ws_.async_handshake(host_, target_,
         beast::bind_front_handler(
@@ -126,8 +130,12 @@ void WebSocketClientBase::on_ssl_handshake(beast::error_code ec) {
 
 void WebSocketClientBase::on_handshake(beast::error_code ec) {
     if (ec) {
+        logger_->error("[{}] WebSocket handshake failed: {}", 
+                       exchange_name(exchange_), ec.message());
         return fail(ec, "handshake");
     }
+    
+    logger_->debug("[{}] WebSocket handshake completed", exchange_name(exchange_));
     
     connected_ = true;
     reconnect_count_ = 0;
@@ -138,20 +146,21 @@ void WebSocketClientBase::on_handshake(beast::error_code ec) {
         stats_.connected_at = std::chrono::steady_clock::now();
     }
     
-    logger_->info("[{}] WebSocket connected", exchange_name(exchange_));
+    logger_->debug("[{}] WebSocket connected", exchange_name(exchange_));
     
     // Connected 이벤트 발행
     WebSocketEvent evt(WebSocketEvent::Type::Connected, exchange_);
     emit_event(std::move(evt));
     
-    // 파생 클래스의 on_connected 호출
-    on_connected();
-    
-    // 구독 메시지 전송
+    // 구독 메시지 전송 - MEXC는 on_connected에서 처리하므로 순서 변경
     std::string subscribe_msg = build_subscribe_message();
     if (!subscribe_msg.empty()) {
+        logger_->debug("[{}] Sending subscribe message: {}", exchange_name(exchange_), subscribe_msg);
         send_message(subscribe_msg);
     }
+    
+    // 파생 클래스의 on_connected 호출
+    on_connected();
     
     // 읽기 시작
     do_read();
@@ -314,8 +323,8 @@ void WebSocketClientBase::schedule_reconnect() {
     // 지수 백오프 (최대 60초)
     int delay_seconds = std::min(60, (1 << reconnect_count_));
     
-    logger_->info("[{}] Reconnecting in {} seconds (attempt {})",
-                  exchange_name(exchange_), delay_seconds, reconnect_count_);
+    logger_->debug("[{}] Reconnecting in {} seconds (attempt {})",
+                   exchange_name(exchange_), delay_seconds, reconnect_count_);
     
     // 통계 업데이트
     {

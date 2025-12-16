@@ -14,6 +14,7 @@ add_library(exchange_websocket
     exchange/binance/websocket.cpp
     exchange/bithumb/websocket.cpp
     exchange/mexc/websocket.cpp
+    exchange/mexc/protobuf_parser.cpp
 )
 
 # Exchange Order 라이브러리

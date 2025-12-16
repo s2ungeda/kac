@@ -62,7 +62,7 @@ int main(int argc, char* argv[]) {
         }
         
         // Logger 초기화 (디버그 레벨로 설정)
-        Logger::init("logs", LogLevel::Debug, LogLevel::Debug);
+        Logger::init("logs", LogLevel::Info, LogLevel::Info);
         
         // IO Context와 SSL Context 생성
         boost::asio::io_context ioc;
@@ -198,7 +198,7 @@ int main(int argc, char* argv[]) {
         
         if (mexc) {
             mexc->subscribe_ticker(mexc_symbols);
-            // mexc->subscribe_orderbook(mexc_symbols);  // MEXC orderbook은 별도 엔드포인트 필요
+            mexc->subscribe_orderbook(mexc_symbols);  // MEXC orderbook 활성화
             mexc->subscribe_trade(mexc_symbols);  // 실시간 체결가
         }
         
@@ -208,7 +208,7 @@ int main(int argc, char* argv[]) {
         if (upbit) upbit->connect("api.upbit.com", "443", "/websocket/v1");
         if (binance) binance->connect_with_streams();  // Combined Stream 사용
         if (bithumb) bithumb->connect("pubwss.bithumb.com", "443", "/pub/ws");
-        if (mexc) mexc->connect("wbs.mexc.com", "443", "/ws");
+        if (mexc) mexc->connect("wbs-api.mexc.com", "443", "/ws");
         
         // IO 스레드 시작
         std::thread io_thread([&ioc]() {
@@ -226,13 +226,10 @@ int main(int argc, char* argv[]) {
             auto process_events = [&processed](auto& client, const char* exchange_name) {
                 if (!client) return;
                 auto& queue = client->event_queue();
-                while (auto evt = queue.pop()) {
+                WebSocketEvent evt;
+                while (queue.pop(evt)) {
                     processed = true;
-                    // 이벤트 처리 (여기서는 간단히 출력)
-                    if (evt->is_ticker()) {
-                        std::cout << "[Queue] " << exchange_name << " Price: " 
-                                  << evt->ticker().price << "\n";
-                    }
+                    // 이벤트 처리 (큐에서 읽은 이벤트는 이미 출력되었으므로 여기서는 무시)
                 }
             };
             
