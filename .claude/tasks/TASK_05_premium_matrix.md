@@ -11,8 +11,13 @@
 필수:
 - 스레드 안전 (shared_mutex)
 - NaN 처리
-- 환율 반영
+- 환율 반영 (FXRateService 연동)
 - 변경 시 콜백
+
+환율 데이터:
+- FXRateService가 /tmp/usdkrw_rate.json에서 읽어옴
+- 10초마다 업데이트 (Selenium 크롤러)
+- 실시간 investing.com 환율 사용
 ```
 
 ---
@@ -107,8 +112,8 @@ private:
     // 거래소별 가격 (원시 값)
     std::array<std::atomic<double>, 4> prices_{};
     
-    // 환율
-    std::atomic<double> fx_rate_{1350.0};  // 기본값
+    // 환율 (FXRateService에서 초기화)
+    std::atomic<double> fx_rate_{1475.0};  // 기본값 (현재 환율 반영)
     
     // 김프 매트릭스 [buy][sell]
     PremiumMatrix matrix_;
@@ -128,6 +133,7 @@ private:
 ```cpp
 #include "arbitrage/strategy/premium_calc.hpp"
 #include "arbitrage/common/logger.hpp"
+#include "arbitrage/common/fxrate.hpp"  // FXRateService 사용
 #include <limits>
 
 namespace arbitrage {
@@ -135,6 +141,15 @@ namespace arbitrage {
 PremiumCalculator::PremiumCalculator()
     : logger_(Logger::create("premium"))
 {
+    // FXRateService에서 초기 환율 가져오기
+    auto fx_service = std::make_shared<FXRateService>();
+    auto fx_result = fx_service->fetch();
+    if (fx_result) {
+        fx_rate_.store(fx_result.value().rate);
+        logger_->info("Initial FX rate: {} from {}", 
+                      fx_result.value().rate, 
+                      fx_result.value().source);
+    }
     // 초기화: NaN으로
     for (auto& row : matrix_) {
         row.fill(std::numeric_limits<double>::quiet_NaN());
@@ -327,8 +342,18 @@ int main() {
                   << " " << info.premium_pct << "%\n";
     });
     
-    // 환율 설정
-    calc.update_fx_rate(1350.0);
+    // FXRateService에서 환율 가져오기
+    FXRateService fx_service;
+    auto fx_result = fx_service.fetch();
+    if (fx_result) {
+        calc.update_fx_rate(fx_result.value().rate);
+        std::cout << "Using FX rate: " << fx_result.value().rate 
+                  << " from " << fx_result.value().source << std::endl;
+    } else {
+        // Fallback
+        calc.update_fx_rate(1475.0);
+        std::cout << "Using default FX rate: 1475.0" << std::endl;
+    }
     
     // 가격 업데이트 (시뮬레이션)
     calc.update_price(arbitrage::Exchange::Binance, 0.62);    // USDT
@@ -356,7 +381,7 @@ int main() {
 
 ```
 □ 4x4 김프 매트릭스 계산
-□ KRW/USDT 환율 반영
+✅ KRW/USDT 환율 반영 (FXRateService 통해 실시간 investing.com 데이터 사용)
 □ NaN 처리
 □ 스레드 안전 (shared_mutex)
 □ 최고 기회 조회

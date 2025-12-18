@@ -4,6 +4,13 @@
 #include "arbitrage/common/json.hpp"
 #include <regex>
 #include <thread>
+#include <fstream>
+#include <chrono>
+
+// 네이티브 C++ 크롤러 함수 선언
+namespace arbitrage {
+    Result<double> fetch_from_investing_native();
+}
 
 namespace arbitrage {
 
@@ -42,20 +49,71 @@ Result<std::string> FXRateService::http_get(
 }
 
 Result<double> FXRateService::fetch_from_investing() {
-    // Free Currency API 사용 (무료, 1000 requests/month)
-    std::string url = "https://api.freecurrencyapi.com/v1/latest?apikey=fca_live_xxx&currencies=KRW&base_currency=USD";
+    // 파일에서 환율 읽기 (Python 크롤러가 주기적으로 업데이트)
+    const std::string fx_file = "/tmp/usdkrw_rate.json";
     
-    auto result = http_get(url, {
-        {"Accept", "application/json"}
-    });
-    
-    if (!result) {
-        return Err<double>(result.error());
+    // 파일 존재 확인
+    std::ifstream file(fx_file);
+    if (!file.is_open()) {
+        logger_->warn("FX rate file not found: {}", fx_file);
+        return Err<double>(ErrorCode::ApiError, "FX rate file not found");
     }
     
-    // 응답 형식: {"data":{"KRW":1320.0}}
-    // JSON 파서 없이는 파싱 불가
-    return Err<double>(ErrorCode::ParseError, "JSON parser not available");
+    // 파일 내용 읽기
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    file.close();
+    
+    // JSON 파싱
+    // {"rate": 1320.5, "source": "exchangerate-api", "timestamp": "...", "timestamp_unix": 1234567890}
+    size_t rate_pos = content.find("\"rate\":");
+    if (rate_pos == std::string::npos) {
+        return Err<double>(ErrorCode::ParseError, "Rate not found in file");
+    }
+    
+    // timestamp_unix 확인 (30초 이상 오래된 데이터는 거부)
+    size_t ts_pos = content.find("\"timestamp_unix\":");
+    if (ts_pos != std::string::npos) {
+        size_t ts_start = ts_pos + 17;
+        size_t ts_end = content.find_first_of(",}", ts_start);
+        std::string ts_str = content.substr(ts_start, ts_end - ts_start);
+        
+        try {
+            double file_timestamp = std::stod(ts_str);
+            auto now = std::chrono::system_clock::now();
+            double current_timestamp = std::chrono::duration<double>(now.time_since_epoch()).count();
+            
+            if (current_timestamp - file_timestamp > 30.0) {
+                logger_->warn("FX rate data is stale ({}s old)", current_timestamp - file_timestamp);
+                return Err<double>(ErrorCode::ApiError, "FX rate data is too old");
+            }
+        } catch (...) {
+            // timestamp 파싱 실패는 무시
+        }
+    }
+    
+    // rate 값 추출
+    size_t start = rate_pos + 7;
+    size_t end = content.find_first_of(",}", start);
+    std::string rate_str = content.substr(start, end - start);
+    
+    try {
+        double rate = std::stod(rate_str);
+        
+        // source 추출 (옵션)
+        size_t source_pos = content.find("\"source\":\"");
+        if (source_pos != std::string::npos) {
+            size_t source_start = source_pos + 10;
+            size_t source_end = content.find("\"", source_start);
+            std::string source = content.substr(source_start, source_end - source_start);
+            logger_->info("Got rate {} from {} (via file)", rate, source);
+        }
+        
+        return Ok(std::move(rate));
+        
+    } catch (const std::exception& e) {
+        return Err<double>(ErrorCode::ParseError, "Failed to parse rate");
+    }
 }
 
 Result<double> FXRateService::fetch_from_bok() {
@@ -152,6 +210,22 @@ Result<FXRate> FXRateService::fetch() {
         cached_rate_ = rate;
         
         return Ok(std::move(rate));
+    }
+    
+    // 4. 캐시된 데이터 사용 (최후의 수단)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (cached_rate_.is_valid()) {
+            auto age = std::chrono::duration_cast<std::chrono::seconds>(
+                rate.timestamp - cached_rate_.timestamp).count();
+            
+            // 5분 이내의 캐시는 사용 가능
+            if (age < 300) {
+                logger_->warn("Using cached rate ({} seconds old)", age);
+                cached_rate_.source = cached_rate_.source + " (cached)";
+                return Ok(cached_rate_);
+            }
+        }
     }
     
     return Err<FXRate>(ErrorCode::ApiError, "모든 API 소스 실패");
