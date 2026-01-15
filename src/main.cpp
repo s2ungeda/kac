@@ -330,7 +330,7 @@ int main(int argc, char* argv[]) {
                    binance_symbol_lower.begin(), ::tolower);
     binance_ws->connect("stream.binance.com", "9443", "/stream?streams=" + binance_symbol_lower + "@aggTrade");
     bithumb_ws->connect("pubwss.bithumb.com", "443", "/pub/ws");
-    mexc_ws->connect("wbs-api.mexc.com", "443", "/ws");
+    mexc_ws->connect("contract.mexc.com", "443", "/edge");
 
     // IO 스레드 시작
     std::thread io_thread([&ioc]() {
