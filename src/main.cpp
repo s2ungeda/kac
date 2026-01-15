@@ -324,16 +324,11 @@ int main(int argc, char* argv[]) {
     // WebSocket 연결
     std::cout << "Connecting to exchanges...\n";
     upbit_ws->connect("api.upbit.com", "443", "/websocket/v1");
-    // Binance COIN-M Futures: XRPUSDT -> xrpusd_perp
-    std::string binance_coinm_symbol = symbol.binance;
-    // USDT를 USD_PERP로 변환
-    size_t usdt_pos = binance_coinm_symbol.find("USDT");
-    if (usdt_pos != std::string::npos) {
-        binance_coinm_symbol = binance_coinm_symbol.substr(0, usdt_pos) + "USD_PERP";
-    }
-    std::transform(binance_coinm_symbol.begin(), binance_coinm_symbol.end(),
-                   binance_coinm_symbol.begin(), ::tolower);
-    binance_ws->connect("dstream.binance.com", "443", "/stream?streams=" + binance_coinm_symbol + "@aggTrade");
+    // Binance USDS-M Futures: xrpusdt@aggTrade
+    std::string binance_symbol_lower = symbol.binance;
+    std::transform(binance_symbol_lower.begin(), binance_symbol_lower.end(),
+                   binance_symbol_lower.begin(), ::tolower);
+    binance_ws->connect("fstream.binance.com", "443", "/stream?streams=" + binance_symbol_lower + "@aggTrade");
     bithumb_ws->connect("pubwss.bithumb.com", "443", "/pub/ws");
     mexc_ws->connect("contract.mexc.com", "443", "/edge");
 
