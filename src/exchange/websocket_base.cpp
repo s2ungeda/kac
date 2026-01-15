@@ -18,7 +18,18 @@ WebSocketClientBase::WebSocketClientBase(net::io_context& ioc, ssl::context& ctx
 
 WebSocketClientBase::~WebSocketClientBase() {
     should_reconnect_ = false;
-    disconnect();
+
+    // 타이머 취소
+    beast::error_code ec;
+    ping_timer_.cancel(ec);
+    reconnect_timer_.cancel(ec);
+
+    // 동기 방식으로 WebSocket 닫기 (소멸자에서는 async 사용 불가)
+    if (ws_.is_open()) {
+        ws_.close(websocket::close_code::normal, ec);
+    }
+
+    connected_ = false;
 }
 
 void WebSocketClientBase::connect(const std::string& host, const std::string& port, const std::string& target) {
@@ -88,12 +99,10 @@ void WebSocketClientBase::on_connect(beast::error_code ec, tcp::resolver::result
     // SSL handshake
     beast::get_lowest_layer(ws_).expires_never();
     
-    // MEXC와 Bithumb을 위한 SNI 설정
-    if (exchange_ == Exchange::MEXC || exchange_ == Exchange::Bithumb) {
-        logger_->debug("[{}] Setting SNI hostname: {}", exchange_name(exchange_), host_);
-        if (!SSL_set_tlsext_host_name(ws_.next_layer().native_handle(), host_.c_str())) {
-            logger_->error("[{}] Failed to set SNI hostname", exchange_name(exchange_));
-        }
+    // 모든 거래소에 SNI 설정 (TLS 연결에 필수)
+    logger_->debug("[{}] Setting SNI hostname: {}", exchange_name(exchange_), host_);
+    if (!SSL_set_tlsext_host_name(ws_.next_layer().native_handle(), host_.c_str())) {
+        logger_->error("[{}] Failed to set SNI hostname", exchange_name(exchange_));
     }
     
     ws_.next_layer().async_handshake(

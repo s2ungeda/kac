@@ -218,12 +218,13 @@ Result<FXRate> FXRateService::fetch() {
         if (cached_rate_.is_valid()) {
             auto age = std::chrono::duration_cast<std::chrono::seconds>(
                 rate.timestamp - cached_rate_.timestamp).count();
-            
+
             // 5분 이내의 캐시는 사용 가능
             if (age < 300) {
                 logger_->warn("Using cached rate ({} seconds old)", age);
-                cached_rate_.source = cached_rate_.source + " (cached)";
-                return Ok(cached_rate_);
+                FXRate cached_copy = cached_rate_;
+                cached_copy.source = cached_copy.source + " (cached)";
+                return Ok(std::move(cached_copy));
             }
         }
     }

@@ -72,16 +72,16 @@ void MEXCWebSocket::send_delayed_subscriptions() {
         // MEXC는 대문자 심볼을 요구함
         std::string symbol = ticker_symbols_[ticker_idx_];
         std::transform(symbol.begin(), symbol.end(), symbol.begin(), ::toupper);
-        
-        // miniTicker 채널 (timezone 포함)
+
+        // aggre.deals 채널 (protobuf, 100ms 간격)
         sub_msg = {
             {"method", "SUBSCRIPTION"},
             {"params", nlohmann::json::array({
-                "spot@public.miniTicker.v3.api.pb@" + symbol + "@UTC+8"
+                "spot@public.aggre.deals.v3.api.pb@100ms@" + symbol
             })},
             {"id", subscribe_id_++}
         };
-        logger_->debug("[MEXC] Subscribing to ticker: {}", sub_msg.dump());
+        logger_->debug("[MEXC] Subscribing to aggre.deals: {}", sub_msg.dump());
         ticker_idx_++;
         if (ticker_idx_ >= ticker_symbols_.size()) ticker_done_ = true;
     } else if (!trade_done_ && trade_idx_ < trade_symbols_.size()) {
@@ -149,6 +149,8 @@ void MEXCWebSocket::parse_message(const std::string& message) {
                         // Field 314 contains the actual trade data
                         if (channel.find("aggre.deals") != std::string::npos) {
                             parse_trade_protobuf(field.data, symbol);
+                            // ticker로도 emit (premium calculator용)
+                            parse_trade_as_ticker_protobuf(field.data, symbol);
                         }
                     }
                 }
@@ -199,7 +201,8 @@ void MEXCWebSocket::parse_message(const std::string& message) {
             } else if (channel.find("depth") != std::string::npos) {
                 parse_orderbook(data);
             } else if (channel.find("deals") != std::string::npos) {
-                parse_trade(data);
+                // deals 데이터에서 가격 추출하여 ticker로 처리
+                parse_deals_as_ticker(data);
             }
         }
         
@@ -349,6 +352,58 @@ void MEXCWebSocket::parse_trade(const nlohmann::json& data) {
     }
 }
 
+void MEXCWebSocket::parse_deals_as_ticker(const nlohmann::json& data) {
+    // deals 데이터에서 마지막 체결가를 ticker로 사용
+    try {
+        Ticker ticker;
+        ticker.exchange = Exchange::MEXC;
+
+        // 심볼
+        if (data.contains("s")) {
+            ticker.symbol = data["s"];
+        }
+
+        // deals 배열에서 마지막 체결 데이터 사용
+        if (data.contains("deals") && data["deals"].is_array() && !data["deals"].empty()) {
+            const auto& last_deal = data["deals"].back();
+
+            // 체결가
+            if (last_deal.contains("p")) {
+                ticker.price = std::stod(last_deal["p"].get<std::string>());
+                ticker.bid = ticker.price;
+                ticker.ask = ticker.price;
+            }
+
+            // 체결량 합계
+            double total_volume = 0.0;
+            for (const auto& deal : data["deals"]) {
+                if (deal.contains("v")) {
+                    total_volume += std::stod(deal["v"].get<std::string>());
+                }
+            }
+            ticker.volume_24h = total_volume;
+
+            // 타임스탬프
+            if (last_deal.contains("t")) {
+                int64_t timestamp_ms = last_deal["t"];
+                ticker.timestamp = std::chrono::system_clock::time_point(
+                    std::chrono::milliseconds(timestamp_ms)
+                );
+            } else {
+                ticker.timestamp = std::chrono::system_clock::now();
+            }
+
+            logger_->info("[MEXC] Ticker (from deals) - Symbol: {}, Price: {}",
+                         ticker.symbol, ticker.price);
+
+            WebSocketEvent evt(WebSocketEvent::Type::Ticker, Exchange::MEXC, ticker);
+            emit_event(std::move(evt));
+        }
+    } catch (const std::exception& e) {
+        logger_->error("[MEXC] Error parsing deals as ticker: {}", e.what());
+    }
+}
+
 void MEXCWebSocket::parse_ticker_protobuf(const std::string& data) {
     auto ticker_opt = mexc::parseMiniTicker(data);
     if (!ticker_opt) {
@@ -436,12 +491,39 @@ void MEXCWebSocket::parse_trade_protobuf(const std::string& data, const std::str
         );
         
         logger_->debug("[MEXC] Trade parsed - Price: {}, Volume: {}, Type: {}",
-                      trade.price, trade.volume_24h, 
+                      trade.price, trade.volume_24h,
                       mexc_trade.trade_type == 0 ? "Buy" : "Sell");
-        
+
         WebSocketEvent evt(WebSocketEvent::Type::Trade, Exchange::MEXC, trade);
         emit_event(std::move(evt));
     }
+}
+
+void MEXCWebSocket::parse_trade_as_ticker_protobuf(const std::string& data, const std::string& symbol) {
+    auto trades_opt = mexc::parseAggreDeals(data);
+    if (!trades_opt || trades_opt.value().empty()) {
+        return;
+    }
+
+    const auto& trades = trades_opt.value();
+    const auto& last_trade = trades.back();
+
+    Ticker ticker;
+    ticker.exchange = Exchange::MEXC;
+    ticker.symbol = symbol;
+    ticker.price = last_trade.price;
+    ticker.bid = last_trade.price;
+    ticker.ask = last_trade.price;
+    ticker.volume_24h = last_trade.quantity;
+    ticker.timestamp = std::chrono::system_clock::time_point(
+        std::chrono::milliseconds(last_trade.timestamp)
+    );
+
+    logger_->info("[MEXC] Ticker (from trades) - Symbol: {}, Price: {}",
+                  ticker.symbol, ticker.price);
+
+    WebSocketEvent evt(WebSocketEvent::Type::Ticker, Exchange::MEXC, ticker);
+    emit_event(std::move(evt));
 }
 
 }  // namespace arbitrage

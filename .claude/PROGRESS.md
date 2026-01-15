@@ -6,8 +6,8 @@
 ---
 
 ## 📅 마지막 업데이트
-- 날짜: 2025-12-18
-- 세션: #5
+- 날짜: 2026-01-15
+- 세션: #6
 
 ---
 
@@ -18,8 +18,8 @@
 | 01 | Project Setup | 2025-12-09 | ✅ 빌드 성공 | CMake, 기본 구조 완성 |
 | 02 | WebSocket | 2025-12-09 | ⬜ Boost 없이 stub | WebSocket base, 4개 거래소 구현 |
 | 03 | Order API | 2025-12-09 | ⬜ libcurl 없이 stub | REST API, Upbit/Binance 구현 |
-| 04 | FXRate | 2025-12-18 | ✅ Selenium 크롤러 | USD/KRW 실시간 환율 (investing.com) |
-| 05 | Premium Matrix | 2025-12-10 | ⬜ stub 구현 | 4x4 김프 매트릭스, 기회 감지, 콜백 |
+| 04 | FXRate | 2026-01-15 | ✅ 빌드 성공 | USD/KRW 환율 (Selenium 크롤러 + 파일 기반) |
+| 05 | Premium Matrix | 2026-01-15 | ✅ 빌드 성공 | 4x4 김프 매트릭스, 실시간 계산, 기회 감지 |
 
 ---
 
@@ -84,16 +84,50 @@
   - Protobuf 파서 추가 (MEXC용)
 - 각종 테스트 프로그램 작성
 
+### 세션 #6 (2026-01-15)
+- FXRate 빌드 에러 수정
+  - Result<T> 템플릿에서 lvalue 참조 문제 해결
+  - fxrate.cpp:226 - cached_rate_ 반환 시 복사본 생성
+- TASK_04, TASK_05 상태 확인 및 업데이트
+  - Premium Calculator 완전 구현 확인 (stub 아님)
+  - 전체 빌드 성공 (100% 타겟 통과)
+- 외부 라이브러리 설치 완료
+  - nlohmann-json3-dev, libspdlog-dev, libyaml-cpp-dev 설치
+- Selenium FX 크롤러 확인 및 시작
+  - /scripts/fx_selenium_crawler.py 정상 동작
+  - investing.com에서 실시간 환율 수신 (1468.29 KRW/USD)
+- WebSocket 연결 문제 해결
+  - Upbit: SNI 설정 추가로 해결 ✅
+  - Bithumb: 정상 동작 ✅
+  - Binance: 정상 동작 ✅
+  - MEXC: aggre.deals.v3.api.pb 채널 형식으로 수정 ✅
+- Premium Matrix 4개 거래소 모두 정상 동작
+  - Upbit: 3111 KRW
+  - Bithumb: 3112 KRW
+  - Binance: 2.12 USDT
+  - MEXC: 2.12 USDT
+- bad_weak_ptr 크래시 수정
+  - 소멸자에서 동기 방식으로 WebSocket 닫기
+  - 타이머 취소 추가
+  - 정상 종료 확인
+
 ---
 
 ## ⚠️ 알려진 이슈
 
-- yaml-cpp, spdlog, simdjson 등 외부 라이브러리 미설치 (기본 동작에는 문제 없음)
 - C++20 기능 중 일부가 GCC 9.4에서 제한적 (std::expected 미지원으로 Result 클래스 직접 구현)
-- Boost.Beast WebSocket 라이브러리 미설치 (stub 구현으로 대체)
-- nlohmann/json 미설치 (json_stub.hpp로 대체)
-- libcurl 미설치 (HTTP client stub 구현)
-- OpenSSL 미설치 (crypto stub 구현)
+- yaml-cpp CMake 설정 경고 (동작에는 문제 없음)
+
+### ✅ 해결된 이슈 (2026-01-15)
+- ~~Boost.Beast 미설치~~ → libboost-all-dev 설치됨
+- ~~nlohmann/json 미설치~~ → nlohmann-json3-dev 설치됨
+- ~~libcurl 미설치~~ → libcurl4-openssl-dev 설치됨
+- ~~OpenSSL 미설치~~ → libssl-dev 설치됨
+- ~~spdlog 미설치~~ → libspdlog-dev 설치됨
+- ~~yaml-cpp 미설치~~ → libyaml-cpp-dev 설치됨
+- ~~Upbit WebSocket 연결 안됨~~ → SNI 설정 추가로 해결
+- ~~MEXC WebSocket 연결 안됨~~ → aggre.deals.v3.api.pb 채널 형식으로 해결
+- ~~bad_weak_ptr 크래시~~ → 소멸자 동기 방식으로 수정
 
 ---
 

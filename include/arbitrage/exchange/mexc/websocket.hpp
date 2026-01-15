@@ -32,11 +32,13 @@ private:
     void parse_ticker(const nlohmann::json& data);
     void parse_orderbook(const nlohmann::json& data);
     void parse_trade(const nlohmann::json& data);
+    void parse_deals_as_ticker(const nlohmann::json& data);
     
     // Protobuf parsing
     void parse_ticker_protobuf(const std::string& data);
     void parse_orderbook_protobuf(const std::string& data, const std::string& symbol);
     void parse_trade_protobuf(const std::string& data, const std::string& symbol);
+    void parse_trade_as_ticker_protobuf(const std::string& data, const std::string& symbol);
     
     // 구독 정보
     std::vector<std::string> ticker_symbols_;

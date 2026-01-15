@@ -220,6 +220,15 @@ int main() {
         }
     }
     
+    // WebSocket 연결 종료
+    upbit_ws->disconnect();
+    binance_ws->disconnect();
+    bithumb_ws->disconnect();
+    mexc_ws->disconnect();
+
+    // 잠시 대기 (비동기 종료 처리)
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
     // IO 스레드 정리
     ioc.stop();
     io_thread.join();
