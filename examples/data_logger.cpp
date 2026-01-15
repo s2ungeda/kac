@@ -1,7 +1,7 @@
-#include "arbitrage/common/config.hpp"
+#include "arbitrage/strategy/premium_calc.hpp"
 #include "arbitrage/common/logger.hpp"
 #include "arbitrage/common/fxrate.hpp"
-#include "arbitrage/strategy/premium_calc.hpp"
+#include "arbitrage/common/config.hpp"
 #include "arbitrage/exchange/upbit/websocket.hpp"
 #include "arbitrage/exchange/binance/websocket.hpp"
 #include "arbitrage/exchange/bithumb/websocket.hpp"
@@ -11,27 +11,20 @@
 #include <iostream>
 #include <fstream>
 #include <iomanip>
-#include <csignal>
-#include <atomic>
 #include <thread>
 #include <chrono>
+#include <atomic>
 #include <mutex>
 #include <sstream>
-#include <algorithm>
 
 using namespace arbitrage;
 
-namespace {
-    std::atomic<bool> g_running{true};
-
-    void signal_handler(int signum) {
-        std::cout << "\n[SIGNAL] Received signal " << signum << ", shutting down...\n";
-        g_running = false;
-    }
-}
-
 // 데이터 파일 경로
 const std::string DATA_DIR = "data/";
+const std::string PRICE_FILE = DATA_DIR + "prices.csv";
+const std::string PREMIUM_FILE = DATA_DIR + "premium.csv";
+const std::string FXRATE_FILE = DATA_DIR + "fxrate.json";
+const std::string SUMMARY_FILE = DATA_DIR + "summary.json";
 
 // 타임스탬프 생성
 std::string get_timestamp() {
@@ -56,7 +49,7 @@ std::string get_iso_timestamp() {
     return oss.str();
 }
 
-// 데이터 로거 클래스
+// 가격 데이터 저장
 class DataLogger {
 public:
     DataLogger() {
@@ -64,12 +57,12 @@ public:
         system(("mkdir -p " + DATA_DIR).c_str());
 
         // 가격 CSV 헤더
-        std::ofstream price_file(DATA_DIR + "prices.csv");
+        std::ofstream price_file(PRICE_FILE);
         price_file << "timestamp,exchange,symbol,price,currency\n";
         price_file.close();
 
         // 프리미엄 CSV 헤더
-        std::ofstream premium_file(DATA_DIR + "premium.csv");
+        std::ofstream premium_file(PREMIUM_FILE);
         premium_file << "timestamp,buy_exchange,sell_exchange,premium_pct,buy_price_krw,sell_price_krw,fx_rate\n";
         premium_file.close();
     }
@@ -78,7 +71,7 @@ public:
                    double price, const std::string& currency) {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        std::ofstream file(DATA_DIR + "prices.csv", std::ios::app);
+        std::ofstream file(PRICE_FILE, std::ios::app);
         file << get_timestamp() << ","
              << exchange << ","
              << symbol << ","
@@ -90,7 +83,7 @@ public:
     void log_premium(const PremiumInfo& info) {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        std::ofstream file(DATA_DIR + "premium.csv", std::ios::app);
+        std::ofstream file(PREMIUM_FILE, std::ios::app);
         file << get_timestamp() << ","
              << exchange_name(info.buy_exchange) << ","
              << exchange_name(info.sell_exchange) << ","
@@ -104,7 +97,7 @@ public:
     void log_fxrate(double rate, const std::string& source) {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        std::ofstream file(DATA_DIR + "fxrate.json");
+        std::ofstream file(FXRATE_FILE);
         file << "{\n"
              << "  \"rate\": " << std::fixed << std::setprecision(2) << rate << ",\n"
              << "  \"source\": \"" << source << "\",\n"
@@ -117,7 +110,7 @@ public:
                      double fx_rate, const PremiumMatrix& matrix) {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        std::ofstream file(DATA_DIR + "summary.json");
+        std::ofstream file(SUMMARY_FILE);
         file << "{\n"
              << "  \"timestamp\": \"" << get_iso_timestamp() << "\",\n"
              << "  \"fx_rate\": " << std::fixed << std::setprecision(2) << fx_rate << ",\n"
@@ -154,62 +147,21 @@ private:
     std::mutex mutex_;
 };
 
-// 매트릭스 출력
-void print_matrix(const PremiumMatrix& matrix) {
-    const char* exchanges[] = {"Upbit", "Bithumb", "Binance", "MEXC"};
-
-    std::cout << "\n=== Premium Matrix (%) ===\n\n";
-    std::cout << "       Buy ->\n";
-    std::cout << "Sell v ";
-
-    for (int i = 0; i < 4; ++i) {
-        std::cout << std::setw(9) << exchanges[i];
-    }
-    std::cout << "\n";
-
-    for (int sell = 0; sell < 4; ++sell) {
-        std::cout << std::setw(7) << exchanges[sell];
-        for (int buy = 0; buy < 4; ++buy) {
-            double premium = matrix[buy][sell];
-            std::cout << std::setw(9) << std::fixed << std::setprecision(2);
-
-            if (std::isnan(premium)) {
-                std::cout << "N/A";
-            } else if (premium > 3.0) {
-                std::cout << "*" << premium << "*";
-            } else {
-                std::cout << premium;
-            }
-        }
-        std::cout << "\n";
-    }
-    std::cout << "\n";
-}
-
 int main(int argc, char* argv[]) {
-    // 설정 파일 경로
-    std::string config_path = "config/config.yaml";
+    // 실행 시간 (초), 기본 60초
+    int duration = 60;
     if (argc > 1) {
-        config_path = argv[1];
+        duration = std::atoi(argv[1]);
     }
 
-    // 로거 초기화
-    Logger::init("arbitrage");
-    auto logger = Logger::create("main");
+    Logger::init("data_logger");
 
-    std::cout << "==============================================\n";
-    std::cout << "   Kimchi Arbitrage System (C++)\n";
-    std::cout << "==============================================\n\n";
+    std::cout << "=== Arbitrage Data Logger ===\n";
+    std::cout << "Duration: " << duration << " seconds\n";
+    std::cout << "Data directory: " << DATA_DIR << "\n\n";
 
-    logger->info("Starting Kimchi Arbitrage System");
-    logger->info("Config: {}", config_path);
-
-    // 설정 로드
-    Config::instance().load(config_path);
-
-    // 시그널 핸들러
-    std::signal(SIGINT, signal_handler);
-    std::signal(SIGTERM, signal_handler);
+    // Config 로드
+    Config::instance().load("config/config.yaml");
 
     // IO Context와 SSL Context 생성
     boost::asio::io_context ioc;
@@ -229,7 +181,7 @@ int main(int argc, char* argv[]) {
     PremiumCalculator calculator;
 
     // Data Logger
-    DataLogger data_logger;
+    DataLogger logger;
 
     // 실시간 가격
     std::atomic<double> price_upbit{0};
@@ -239,33 +191,23 @@ int main(int argc, char* argv[]) {
     std::atomic<double> current_fx_rate{0};
 
     // 환율 가져오기
-    std::cout << "Fetching FX rate...\n";
     auto fx_result = fx_service.fetch();
     if (fx_result) {
         double rate = fx_result.value().rate;
         current_fx_rate = rate;
         calculator.update_fx_rate(rate);
-        data_logger.log_fxrate(rate, fx_result.value().source);
-        std::cout << "FX Rate: " << std::fixed << std::setprecision(2)
-                  << rate << " KRW/USD (" << fx_result.value().source << ")\n";
+        logger.log_fxrate(rate, fx_result.value().source);
+        std::cout << "FX Rate: " << rate << " KRW/USD (" << fx_result.value().source << ")\n";
     } else {
         current_fx_rate = 1450.0;
         calculator.update_fx_rate(1450.0);
         std::cout << "FX Rate: 1450.0 KRW/USD (default)\n";
     }
 
-    // 프리미엄 콜백 설정 (2% 이상 알림)
-    calculator.set_threshold(2.0);
-    calculator.on_premium_changed([&data_logger, &logger](const PremiumInfo& info) {
-        data_logger.log_premium(info);
-        logger->warn("ALERT: Premium {}% detected! {} -> {}",
-                     info.premium_pct,
-                     exchange_name(info.buy_exchange),
-                     exchange_name(info.sell_exchange));
-        std::cout << "\n*** PREMIUM ALERT: " << std::fixed << std::setprecision(2)
-                  << info.premium_pct << "% ("
-                  << exchange_name(info.buy_exchange) << " -> "
-                  << exchange_name(info.sell_exchange) << ") ***\n";
+    // 프리미엄 콜백 설정 (1% 이상 기록)
+    calculator.set_threshold(1.0);
+    calculator.on_premium_changed([&logger](const PremiumInfo& info) {
+        logger.log_premium(info);
     });
 
     // WebSocket 이벤트 핸들러
@@ -274,7 +216,7 @@ int main(int argc, char* argv[]) {
             double price = evt.ticker().price;
             price_upbit = price;
             calculator.update_price(Exchange::Upbit, price);
-            data_logger.log_price("upbit", evt.ticker().symbol, price, "KRW");
+            logger.log_price("upbit", evt.ticker().symbol, price, "KRW");
         }
     });
 
@@ -283,7 +225,7 @@ int main(int argc, char* argv[]) {
             double price = evt.ticker().price;
             price_binance = price;
             calculator.update_price(Exchange::Binance, price);
-            data_logger.log_price("binance", evt.ticker().symbol, price, "USDT");
+            logger.log_price("binance", evt.ticker().symbol, price, "USDT");
         }
     });
 
@@ -292,7 +234,7 @@ int main(int argc, char* argv[]) {
             double price = evt.ticker().price;
             price_bithumb = price;
             calculator.update_price(Exchange::Bithumb, price);
-            data_logger.log_price("bithumb", evt.ticker().symbol, price, "KRW");
+            logger.log_price("bithumb", evt.ticker().symbol, price, "KRW");
         }
     });
 
@@ -301,15 +243,14 @@ int main(int argc, char* argv[]) {
             double price = evt.ticker().price;
             price_mexc = price;
             calculator.update_price(Exchange::MEXC, price);
-            data_logger.log_price("mexc", evt.ticker().symbol, price, "USDT");
+            logger.log_price("mexc", evt.ticker().symbol, price, "USDT");
         }
     });
 
     // 심볼 구독
     const auto& primary_symbols = Config::instance().primary_symbols();
     if (primary_symbols.empty()) {
-        logger->error("No primary symbols configured");
-        std::cerr << "Error: No primary symbols configured\n";
+        std::cerr << "No primary symbols configured\n";
         return 1;
     }
 
@@ -324,11 +265,7 @@ int main(int argc, char* argv[]) {
     // WebSocket 연결
     std::cout << "Connecting to exchanges...\n";
     upbit_ws->connect("api.upbit.com", "443", "/websocket/v1");
-    // Binance는 소문자 심볼 필요
-    std::string binance_symbol_lower = symbol.binance;
-    std::transform(binance_symbol_lower.begin(), binance_symbol_lower.end(),
-                   binance_symbol_lower.begin(), ::tolower);
-    binance_ws->connect("stream.binance.com", "9443", "/stream?streams=" + binance_symbol_lower + "@ticker");
+    binance_ws->connect("stream.binance.com", "9443", "/stream?streams=xrpusdt@ticker");
     bithumb_ws->connect("pubwss.bithumb.com", "443", "/pub/ws");
     mexc_ws->connect("wbs-api.mexc.com", "443", "/ws");
 
@@ -337,63 +274,52 @@ int main(int argc, char* argv[]) {
         ioc.run();
     });
 
-    logger->info("System started, press Ctrl+C to stop");
-    std::cout << "\nSystem running... Press Ctrl+C to stop.\n";
-    std::cout << "Data saved to: " << DATA_DIR << "\n\n";
+    // 데이터 수집 루프
+    std::cout << "Logging data for " << duration << " seconds...\n\n";
 
-    // 메인 루프
-    auto last_display = std::chrono::steady_clock::now();
-    auto last_fx_update = std::chrono::steady_clock::now();
-    int display_count = 0;
+    auto start_time = std::chrono::steady_clock::now();
+    int log_count = 0;
 
-    while (g_running) {
+    while (true) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - start_time).count();
+
+        if (elapsed >= duration) {
+            break;
+        }
+
         std::this_thread::sleep_for(std::chrono::seconds(1));
-
-        auto now = std::chrono::steady_clock::now();
 
         // 매 초마다 summary 업데이트
         auto matrix = calculator.get_matrix();
-        data_logger.log_summary(price_upbit, price_bithumb, price_binance, price_mexc,
-                                current_fx_rate, matrix);
+        logger.log_summary(price_upbit, price_bithumb, price_binance, price_mexc,
+                          current_fx_rate, matrix);
 
         // 10초마다 상태 출력
-        auto display_elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-            now - last_display).count();
-        if (display_elapsed >= 10) {
-            display_count++;
-            std::cout << "[" << get_timestamp() << "] "
+        if (elapsed % 10 == 0 && elapsed > 0) {
+            std::cout << "[" << elapsed << "s] "
                       << "Upbit: " << std::fixed << std::setprecision(0) << price_upbit.load()
                       << " | Bithumb: " << price_bithumb.load()
                       << " | Binance: " << std::setprecision(4) << price_binance.load()
                       << " | MEXC: " << price_mexc.load()
                       << " | FX: " << std::setprecision(2) << current_fx_rate.load()
                       << "\n";
-
-            // 30초마다 매트릭스 출력
-            if (display_count % 3 == 0) {
-                print_matrix(matrix);
-            }
-
-            last_display = now;
+            log_count++;
         }
 
-        // 30초마다 환율 갱신
-        auto fx_elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-            now - last_fx_update).count();
-        if (fx_elapsed >= 30) {
+        // 환율 갱신 (30초마다)
+        if (elapsed % 30 == 0 && elapsed > 0) {
             auto fx = fx_service.fetch();
             if (fx) {
                 current_fx_rate = fx.value().rate;
                 calculator.update_fx_rate(fx.value().rate);
-                data_logger.log_fxrate(fx.value().rate, fx.value().source);
+                logger.log_fxrate(fx.value().rate, fx.value().source);
             }
-            last_fx_update = now;
         }
     }
 
     // 정리
     std::cout << "\nShutting down...\n";
-    logger->info("Shutting down...");
 
     upbit_ws->disconnect();
     binance_ws->disconnect();
@@ -405,25 +331,13 @@ int main(int argc, char* argv[]) {
     ioc.stop();
     io_thread.join();
 
-    // 최종 통계 출력
-    std::cout << "\n=== Final Statistics ===\n";
-    std::cout << "Last prices:\n";
-    std::cout << "  Upbit:   " << std::fixed << std::setprecision(0) << price_upbit.load() << " KRW\n";
-    std::cout << "  Bithumb: " << price_bithumb.load() << " KRW\n";
-    std::cout << "  Binance: " << std::setprecision(4) << price_binance.load() << " USDT\n";
-    std::cout << "  MEXC:    " << price_mexc.load() << " USDT\n";
-    std::cout << "  FX Rate: " << std::setprecision(2) << current_fx_rate.load() << " KRW/USD\n";
-    std::cout << "\nData saved to: " << DATA_DIR << "\n";
-
-    auto best = calculator.get_best_opportunity();
-    if (best) {
-        std::cout << "Best premium: " << std::setprecision(2) << best->premium_pct << "% ("
-                  << exchange_name(best->buy_exchange) << " -> "
-                  << exchange_name(best->sell_exchange) << ")\n";
-    }
-
-    Logger::shutdown();
-    std::cout << "\nGoodbye!\n";
+    // 결과 출력
+    std::cout << "\n=== Data Logging Complete ===\n";
+    std::cout << "Files saved to: " << DATA_DIR << "\n";
+    std::cout << "  - prices.csv    : Price history\n";
+    std::cout << "  - premium.csv   : Premium alerts (>1%)\n";
+    std::cout << "  - fxrate.json   : Current FX rate\n";
+    std::cout << "  - summary.json  : Latest summary\n";
 
     return 0;
 }

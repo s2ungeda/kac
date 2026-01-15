@@ -65,3 +65,4 @@ core.*
 # Watchdog state
 watchdog.pid
 watchdog.sock
+data/

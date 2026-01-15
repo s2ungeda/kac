@@ -95,7 +95,33 @@ add_executable(test_simple_mexc ${CMAKE_SOURCE_DIR}/test_simple_mexc.cpp)
 target_link_libraries(test_simple_mexc
     PRIVATE
         ${Boost_LIBRARIES}
-        OpenSSL::SSL 
+        OpenSSL::SSL
         OpenSSL::Crypto
         Threads::Threads
 )
+
+# Data Logger - 실시간 데이터 파일 저장
+add_executable(data_logger data_logger.cpp)
+
+target_link_libraries(data_logger
+    PRIVATE
+        common
+        strategy
+        exchange_websocket
+        Threads::Threads
+)
+
+# Boost 링크
+if(Boost_FOUND)
+    target_link_libraries(data_logger PRIVATE ${Boost_LIBRARIES})
+endif()
+
+# OpenSSL 링크
+if(OpenSSL_FOUND)
+    target_link_libraries(data_logger PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+endif()
+
+# CURL 링크
+if(CURL_FOUND)
+    target_link_libraries(data_logger PRIVATE ${CURL_LIBRARIES})
+endif()

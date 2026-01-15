@@ -103,6 +103,7 @@ add_executable(arbitrage
 target_link_libraries(arbitrage
     PRIVATE
         common
+        strategy
         exchange_websocket
         exchange_order
         Threads::Threads

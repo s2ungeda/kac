@@ -110,6 +110,22 @@
   - 소멸자에서 동기 방식으로 WebSocket 닫기
   - 타이머 취소 추가
   - 정상 종료 확인
+- 실시간 데이터 로깅 기능 추가
+  - examples/data_logger.cpp 작성
+  - data/ 디렉토리에 데이터 저장
+    - prices.csv: 가격 히스토리 (timestamp, exchange, symbol, price, currency)
+    - premium.csv: 프리미엄 알림 (1% 이상)
+    - fxrate.json: 현재 환율
+    - summary.json: 최신 요약 (전체 가격 + 프리미엄 매트릭스)
+  - 30초 테스트 성공 (151개 가격 레코드 기록)
+- 메인 프로그램 (arbitrage) 기능 통합
+  - src/main.cpp 전체 재작성
+  - 4개 거래소 WebSocket 연결 (Upbit, Bithumb, Binance, MEXC)
+  - 실시간 김프 매트릭스 계산 및 출력
+  - 데이터 로깅 (prices.csv, premium.csv, fxrate.json, summary.json)
+  - 환율 자동 갱신 (30초 주기)
+  - Ctrl+C 시그널로 안전한 종료
+  - Binance 소문자 심볼 처리 수정
 
 ---
 
