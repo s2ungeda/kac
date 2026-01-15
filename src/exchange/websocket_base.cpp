@@ -357,12 +357,13 @@ void WebSocketClientBase::on_reconnect_timer(beast::error_code ec) {
 }
 
 void WebSocketClientBase::emit_event(WebSocketEvent&& evt) {
-    // 콜백 호출 (옵션) - move 전에 호출해야 함
+    // 콜백이 설정되어 있으면 콜백으로 처리하고 큐에는 넣지 않음
     if (event_callback_) {
         event_callback_(evt);
+        return;
     }
-    
-    // Lock-Free Queue에 추가
+
+    // 콜백이 없으면 Lock-Free Queue에 추가
     if (!event_queue_.push(std::move(evt))) {
         logger_->warn("[{}] Event queue full, dropping event",
                       exchange_name(exchange_));
