@@ -58,6 +58,7 @@ struct WebSocketEvent {
     
     // 편의 함수
     bool is_ticker() const { return type == Type::Ticker; }
+    bool is_trade() const { return type == Type::Trade; }
     bool is_orderbook() const { return type == Type::OrderBook; }
     
     const Ticker& ticker() const { 

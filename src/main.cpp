@@ -194,7 +194,7 @@ int main(int argc, char* argv[]) {
     }
 
     // 로거 초기화
-    Logger::init("arbitrage");
+    Logger::init("logs");
     auto logger = Logger::create("main");
 
     std::cout << "==============================================\n";
@@ -279,7 +279,7 @@ int main(int argc, char* argv[]) {
     });
 
     binance_ws->on_event([&](const WebSocketEvent& evt) {
-        if (evt.is_ticker()) {
+        if (evt.is_ticker() || evt.is_trade()) {
             double price = evt.ticker().price;
             price_binance = price;
             calculator.update_price(Exchange::Binance, price);
@@ -317,7 +317,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Symbol: " << symbol.symbol << "\n\n";
 
     upbit_ws->subscribe_ticker({symbol.upbit});
-    binance_ws->subscribe_ticker({symbol.binance});
+    binance_ws->subscribe_trade({symbol.binance});
     bithumb_ws->subscribe_ticker({symbol.bithumb});
     mexc_ws->subscribe_ticker({symbol.mexc});
 
@@ -328,7 +328,7 @@ int main(int argc, char* argv[]) {
     std::string binance_symbol_lower = symbol.binance;
     std::transform(binance_symbol_lower.begin(), binance_symbol_lower.end(),
                    binance_symbol_lower.begin(), ::tolower);
-    binance_ws->connect("stream.binance.com", "9443", "/stream?streams=" + binance_symbol_lower + "@ticker");
+    binance_ws->connect("stream.binance.com", "9443", "/stream?streams=" + binance_symbol_lower + "@aggTrade");
     bithumb_ws->connect("pubwss.bithumb.com", "443", "/pub/ws");
     mexc_ws->connect("wbs-api.mexc.com", "443", "/ws");
 

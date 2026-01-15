@@ -125,8 +125,11 @@ void UpbitWebSocket::parse_ticker(const nlohmann::json& data) {
         std::chrono::milliseconds(timestamp_ms)
     );
     
+    logger_->info("[Upbit] Ticker parsed - Symbol: {}, Price: {} KRW",
+                  ticker.symbol, static_cast<int>(ticker.price));
+
     WebSocketEvent evt(WebSocketEvent::Type::Ticker, Exchange::Upbit, ticker);
-    
+
     emit_event(std::move(evt));
 }
 

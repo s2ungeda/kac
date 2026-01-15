@@ -89,19 +89,20 @@ void BinanceWebSocket::parse_message(const std::string& message) {
                 parse_ticker(data);
             } else if (stream.find("@depth") != std::string::npos) {
                 parse_orderbook(data, symbol);
-            } else if (stream.find("@trade") != std::string::npos) {
+            } else if (stream.find("@aggTrade") != std::string::npos ||
+                       stream.find("@trade") != std::string::npos) {
                 parse_trade(data);
             }
         }
         // 단일 스트림 메시지
         else if (json.contains("e")) {
             std::string event_type = json["e"];
-            
+
             if (event_type == "24hrTicker") {
                 parse_ticker(json);
             } else if (event_type == "depthUpdate") {
                 parse_orderbook(json, "");
-            } else if (event_type == "trade") {
+            } else if (event_type == "trade" || event_type == "aggTrade") {
                 parse_trade(json);
             }
         }
@@ -126,8 +127,11 @@ void BinanceWebSocket::parse_ticker(const nlohmann::json& data) {
         std::chrono::milliseconds(timestamp_ms)
     );
     
+    logger_->info("[Binance] Ticker parsed - Symbol: {}, Price: {} USDT",
+                  ticker.symbol, ticker.price);
+
     WebSocketEvent evt(WebSocketEvent::Type::Ticker, Exchange::Binance, ticker);
-    
+
     emit_event(std::move(evt));
 }
 
@@ -201,8 +205,11 @@ void BinanceWebSocket::parse_trade(const nlohmann::json& data) {
         std::chrono::milliseconds(timestamp_ms)
     );
     
+    logger_->info("[Binance] Trade parsed - Symbol: {}, Price: {} USDT",
+                  trade.symbol, trade.price);
+
     WebSocketEvent evt(WebSocketEvent::Type::Trade, Exchange::Binance, trade);
-    
+
     emit_event(std::move(evt));
 }
 
