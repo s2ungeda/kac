@@ -297,7 +297,7 @@ int main(int argc, char* argv[]) {
     });
 
     mexc_ws->on_event([&](const WebSocketEvent& evt) {
-        if (evt.is_ticker()) {
+        if (evt.is_ticker() || evt.is_trade()) {
             double price = evt.ticker().price;
             price_mexc = price;
             calculator.update_price(Exchange::MEXC, price);
@@ -319,7 +319,7 @@ int main(int argc, char* argv[]) {
     upbit_ws->subscribe_ticker({symbol.upbit});
     binance_ws->subscribe_trade({symbol.binance});
     bithumb_ws->subscribe_ticker({symbol.bithumb});
-    mexc_ws->subscribe_ticker({symbol.mexc});
+    mexc_ws->subscribe_trade({symbol.mexc});
 
     // WebSocket 연결
     std::cout << "Connecting to exchanges...\n";
