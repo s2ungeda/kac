@@ -23,8 +23,8 @@ void MEXCWebSocket::subscribe_trade(const std::vector<std::string>& symbols) {
 }
 
 void MEXCWebSocket::on_connected() {
-    // MEXC Futures는 연결 후 구독 메시지 전송
-    logger_->info("[MEXC Futures] Connected, starting subscriptions...");
+    // MEXC는 연결 후 구독 메시지 전송
+    logger_->info("[MEXC] Connected, starting subscriptions...");
 
     // 구독 상태 초기화
     ticker_idx_ = 0;
@@ -39,7 +39,7 @@ void MEXCWebSocket::on_connected() {
 }
 
 std::string MEXCWebSocket::build_subscribe_message() {
-    // MEXC Futures는 on_connected에서 처리
+    // MEXC는 on_connected에서 처리
     return "";
 }
 
@@ -73,7 +73,7 @@ void MEXCWebSocket::send_subscriptions() {
             {"method", "sub.ticker"},
             {"param", {{"symbol", futures_symbol}}}
         };
-        logger_->info("[MEXC Futures] Subscribing to ticker: {}", futures_symbol);
+        logger_->info("[MEXC] Subscribing to ticker: {}", futures_symbol);
         send_message(sub_msg.dump());
     }
 
@@ -84,7 +84,7 @@ void MEXCWebSocket::send_subscriptions() {
             {"method", "sub.deal"},
             {"param", {{"symbol", futures_symbol}}}
         };
-        logger_->info("[MEXC Futures] Subscribing to deals: {}", futures_symbol);
+        logger_->info("[MEXC] Subscribing to deals: {}", futures_symbol);
         send_message(sub_msg.dump());
     }
 
@@ -95,7 +95,7 @@ void MEXCWebSocket::send_subscriptions() {
             {"method", "sub.depth"},
             {"param", {{"symbol", futures_symbol}}}
         };
-        logger_->info("[MEXC Futures] Subscribing to depth: {}", futures_symbol);
+        logger_->info("[MEXC] Subscribing to depth: {}", futures_symbol);
         send_message(sub_msg.dump());
     }
 }
@@ -108,23 +108,27 @@ void MEXCWebSocket::parse_message(const std::string& message) {
 
         auto json = nlohmann::json::parse(message);
 
-        // Ping 처리
+        // Pong 응답 처리 (다양한 형식 지원)
         if (json.contains("channel") && json["channel"] == "pong") {
-            logger_->debug("[MEXC Futures] Received pong");
+            logger_->debug("[MEXC] Received pong (channel)");
+            return;
+        }
+        if (json.contains("data") && json["data"] == "pong") {
+            logger_->debug("[MEXC] Received pong (data)");
             return;
         }
 
         // 구독 응답 처리
         if (json.contains("channel") && json["channel"] == "rs.sub.ticker") {
-            logger_->info("[MEXC Futures] Ticker subscription confirmed");
+            logger_->info("[MEXC] Ticker subscription confirmed");
             return;
         }
         if (json.contains("channel") && json["channel"] == "rs.sub.deal") {
-            logger_->info("[MEXC Futures] Deal subscription confirmed");
+            logger_->info("[MEXC] Deal subscription confirmed");
             return;
         }
         if (json.contains("channel") && json["channel"] == "rs.sub.depth") {
-            logger_->info("[MEXC Futures] Depth subscription confirmed");
+            logger_->info("[MEXC] Depth subscription confirmed");
             return;
         }
 
@@ -142,7 +146,7 @@ void MEXCWebSocket::parse_message(const std::string& message) {
         }
 
     } catch (const std::exception& e) {
-        logger_->error("[MEXC Futures] Parse error: {}", e.what());
+        logger_->error("[MEXC] Parse error: {}", e.what());
     }
 }
 
@@ -192,14 +196,14 @@ void MEXCWebSocket::parse_ticker(const nlohmann::json& json) {
             ticker.timestamp = std::chrono::system_clock::now();
         }
 
-        logger_->info("[MEXC Futures] Ticker - Symbol: {}, Price: {}, Bid: {}, Ask: {}",
+        logger_->info("[MEXC] Ticker - Symbol: {}, Price: {}, Bid: {}, Ask: {}",
                       ticker.symbol, ticker.price, ticker.bid, ticker.ask);
 
         WebSocketEvent evt(WebSocketEvent::Type::Ticker, Exchange::MEXC, ticker);
         emit_event(std::move(evt));
 
     } catch (const std::exception& e) {
-        logger_->error("[MEXC Futures] Error parsing ticker: {}", e.what());
+        logger_->error("[MEXC] Error parsing ticker: {}", e.what());
     }
 }
 
@@ -220,7 +224,7 @@ void MEXCWebSocket::parse_deal(const nlohmann::json& json) {
         }
 
     } catch (const std::exception& e) {
-        logger_->error("[MEXC Futures] Error parsing deal: {}", e.what());
+        logger_->error("[MEXC] Error parsing deal: {}", e.what());
     }
 }
 
@@ -267,7 +271,7 @@ void MEXCWebSocket::process_single_deal(const nlohmann::json& deal, const std::s
         trade.timestamp = std::chrono::system_clock::now();
     }
 
-    logger_->info("[MEXC Futures] Deal - Symbol: {}, Price: {}, Vol: {}",
+    logger_->info("[MEXC] Deal - Symbol: {}, Price: {}, Vol: {}",
                   trade.symbol, trade.price, trade.volume_24h);
 
     // Trade 이벤트
@@ -317,7 +321,7 @@ void MEXCWebSocket::parse_depth(const nlohmann::json& json) {
         orderbook.timestamp = std::chrono::system_clock::now();
 
         if (!orderbook.bids.empty() && !orderbook.asks.empty()) {
-            logger_->debug("[MEXC Futures] Depth - Best Bid: {}, Best Ask: {}",
+            logger_->debug("[MEXC] Depth - Best Bid: {}, Best Ask: {}",
                           orderbook.bids[0].price, orderbook.asks[0].price);
         }
 
@@ -325,13 +329,13 @@ void MEXCWebSocket::parse_depth(const nlohmann::json& json) {
         emit_event(std::move(evt));
 
     } catch (const std::exception& e) {
-        logger_->error("[MEXC Futures] Error parsing depth: {}", e.what());
+        logger_->error("[MEXC] Error parsing depth: {}", e.what());
     }
 }
 
 std::chrono::seconds MEXCWebSocket::ping_interval() const {
-    // MEXC Futures는 10-20초 권장
-    return std::chrono::seconds(15);
+    // MEXC Futures는 10초 간격 권장
+    return std::chrono::seconds(10);
 }
 
 }  // namespace arbitrage

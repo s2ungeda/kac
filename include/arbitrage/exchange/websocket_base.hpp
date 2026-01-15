@@ -134,10 +134,12 @@ protected:
     std::shared_ptr<SimpleLogger> logger_;
     
 private:
+    void reset_websocket();  // 재연결을 위한 WebSocket 스트림 재생성
+
     net::io_context& ioc_;
     ssl::context& ctx_;
     tcp::resolver resolver_;
-    websocket::stream<beast::ssl_stream<beast::tcp_stream>> ws_;
+    std::unique_ptr<websocket::stream<beast::ssl_stream<beast::tcp_stream>>> ws_;
     beast::flat_buffer buffer_;
     net::steady_timer ping_timer_;
     net::steady_timer reconnect_timer_;

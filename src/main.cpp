@@ -270,7 +270,7 @@ int main(int argc, char* argv[]) {
 
     // WebSocket 이벤트 핸들러
     upbit_ws->on_event([&](const WebSocketEvent& evt) {
-        if (evt.is_ticker()) {
+        if (evt.is_ticker() || evt.is_trade()) {
             double price = evt.ticker().price;
             price_upbit = price;
             calculator.update_price(Exchange::Upbit, price);
@@ -316,7 +316,7 @@ int main(int argc, char* argv[]) {
     const auto& symbol = primary_symbols[0];
     std::cout << "Symbol: " << symbol.symbol << "\n\n";
 
-    upbit_ws->subscribe_ticker({symbol.upbit});
+    upbit_ws->subscribe_trade({symbol.upbit});
     binance_ws->subscribe_trade({symbol.binance});
     bithumb_ws->subscribe_trade({symbol.bithumb});
     mexc_ws->subscribe_trade({symbol.mexc});

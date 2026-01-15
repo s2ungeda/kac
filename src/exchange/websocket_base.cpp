@@ -11,9 +11,20 @@ WebSocketClientBase::WebSocketClientBase(net::io_context& ioc, ssl::context& ctx
     , ioc_(ioc)
     , ctx_(ctx)
     , resolver_(ioc)
-    , ws_(ioc, ctx)
+    , ws_(std::make_unique<websocket::stream<beast::ssl_stream<beast::tcp_stream>>>(ioc, ctx))
     , ping_timer_(ioc)
     , reconnect_timer_(ioc) {
+}
+
+void WebSocketClientBase::reset_websocket() {
+    // 기존 스트림이 열려있으면 닫기
+    if (ws_ && ws_->is_open()) {
+        beast::error_code ec;
+        ws_->close(websocket::close_code::normal, ec);
+    }
+    // 새 WebSocket 스트림 생성
+    ws_ = std::make_unique<websocket::stream<beast::ssl_stream<beast::tcp_stream>>>(ioc_, ctx_);
+    buffer_.clear();
 }
 
 WebSocketClientBase::~WebSocketClientBase() {
@@ -25,8 +36,8 @@ WebSocketClientBase::~WebSocketClientBase() {
     reconnect_timer_.cancel(ec);
 
     // 동기 방식으로 WebSocket 닫기 (소멸자에서는 async 사용 불가)
-    if (ws_.is_open()) {
-        ws_.close(websocket::close_code::normal, ec);
+    if (ws_ && ws_->is_open()) {
+        ws_->close(websocket::close_code::normal, ec);
     }
 
     connected_ = false;
@@ -36,13 +47,16 @@ void WebSocketClientBase::connect(const std::string& host, const std::string& po
     host_ = host;
     port_ = port;
     target_ = target;
-    
+
     logger_->debug("[{}] Connecting to {}:{}{}",
                    exchange_name(exchange_), host, port, target);
-    
+
     // 연결 상태 초기화
     connected_ = false;
-    
+
+    // WebSocket 스트림 재생성 (재연결 시 필수)
+    reset_websocket();
+
     // DNS 조회
     logger_->debug("[{}] Starting DNS lookup for {}", exchange_name(exchange_), host);
     resolver_.async_resolve(
@@ -54,13 +68,13 @@ void WebSocketClientBase::connect(const std::string& host, const std::string& po
 
 void WebSocketClientBase::disconnect() {
     should_reconnect_ = false;
-    
-    if (!ws_.is_open()) {
+
+    if (!ws_ || !ws_->is_open()) {
         return;
     }
-    
+
     // Close the WebSocket Connection
-    ws_.async_close(websocket::close_code::normal,
+    ws_->async_close(websocket::close_code::normal,
         beast::bind_front_handler(
             &WebSocketClientBase::on_close,
             shared_from_this()));
@@ -77,10 +91,10 @@ void WebSocketClientBase::on_resolve(beast::error_code ec, tcp::resolver::result
                    exchange_name(exchange_), host_, results.size());
     
     // TCP 타임아웃 설정
-    beast::get_lowest_layer(ws_).expires_after(std::chrono::seconds(30));
+    beast::get_lowest_layer(*ws_).expires_after(std::chrono::seconds(30));
     
     // 연결
-    beast::get_lowest_layer(ws_).async_connect(
+    beast::get_lowest_layer(*ws_).async_connect(
         results,
         beast::bind_front_handler(
             &WebSocketClientBase::on_connect,
@@ -97,15 +111,15 @@ void WebSocketClientBase::on_connect(beast::error_code ec, tcp::resolver::result
     logger_->debug("[{}] TCP connected to {}", exchange_name(exchange_), ep.address().to_string());
     
     // SSL handshake
-    beast::get_lowest_layer(ws_).expires_never();
+    beast::get_lowest_layer(*ws_).expires_never();
     
     // 모든 거래소에 SNI 설정 (TLS 연결에 필수)
     logger_->debug("[{}] Setting SNI hostname: {}", exchange_name(exchange_), host_);
-    if (!SSL_set_tlsext_host_name(ws_.next_layer().native_handle(), host_.c_str())) {
+    if (!SSL_set_tlsext_host_name(ws_->next_layer().native_handle(), host_.c_str())) {
         logger_->error("[{}] Failed to set SNI hostname", exchange_name(exchange_));
     }
     
-    ws_.next_layer().async_handshake(
+    ws_->next_layer().async_handshake(
         ssl::stream_base::client,
         beast::bind_front_handler(
             &WebSocketClientBase::on_ssl_handshake,
@@ -122,16 +136,16 @@ void WebSocketClientBase::on_ssl_handshake(beast::error_code ec) {
     logger_->debug("[{}] SSL handshake completed", exchange_name(exchange_));
     
     // WebSocket handshake
-    ws_.set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
+    ws_->set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
     
     // 기본 User-Agent만 설정
-    ws_.set_option(websocket::stream_base::decorator(
+    ws_->set_option(websocket::stream_base::decorator(
         [](websocket::request_type& req) {
             req.set(boost::beast::http::field::user_agent, 
                    "kimchi-arbitrage-cpp/1.0");
         }));
     
-    ws_.async_handshake(host_, target_,
+    ws_->async_handshake(host_, target_,
         beast::bind_front_handler(
             &WebSocketClientBase::on_handshake,
             shared_from_this()));
@@ -181,7 +195,7 @@ void WebSocketClientBase::on_handshake(beast::error_code ec) {
 }
 
 void WebSocketClientBase::do_read() {
-    ws_.async_read(
+    ws_->async_read(
         buffer_,
         beast::bind_front_handler(
             &WebSocketClientBase::on_read,
@@ -216,7 +230,7 @@ void WebSocketClientBase::on_read(beast::error_code ec, std::size_t bytes_transf
 }
 
 void WebSocketClientBase::send_message(const std::string& message) {
-    net::post(ws_.get_executor(),
+    net::post(ws_->get_executor(),
         [self = shared_from_this(), message]() {
             bool write_in_progress = false;
             {
@@ -238,7 +252,7 @@ void WebSocketClientBase::do_write() {
     }
     
     writing_ = true;
-    ws_.async_write(
+    ws_->async_write(
         net::buffer(write_queue_.front()),
         beast::bind_front_handler(
             &WebSocketClientBase::on_write,
@@ -273,16 +287,17 @@ void WebSocketClientBase::on_ping_timer(beast::error_code ec) {
         return;
     }
     
-    if (!ws_.is_open()) {
+    if (!ws_->is_open()) {
         return;
     }
     
     // Ping 전송
     if (exchange_ == Exchange::MEXC) {
-        // MEXC는 JSON 형식의 ping을 원함
-        send_message("{\"method\": \"PING\"}");
+        // MEXC Futures는 소문자 ping 사용
+        send_message("{\"method\":\"ping\"}");
+        logger_->debug("[MEXC] Ping sent");
     } else {
-        ws_.async_ping({},
+        ws_->async_ping({},
             [self = shared_from_this()](beast::error_code ec) {
                 if (ec) {
                     self->logger_->error("[{}] Ping failed: {}",

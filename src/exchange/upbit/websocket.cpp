@@ -125,7 +125,7 @@ void UpbitWebSocket::parse_ticker(const nlohmann::json& data) {
         std::chrono::milliseconds(timestamp_ms)
     );
     
-    logger_->info("[Upbit] Ticker parsed - Symbol: {}, Price: {} KRW",
+    logger_->info("[Upbit] Ticker - Symbol: {}, Price: {} KRW",
                   ticker.symbol, static_cast<int>(ticker.price));
 
     WebSocketEvent evt(WebSocketEvent::Type::Ticker, Exchange::Upbit, ticker);
@@ -179,8 +179,8 @@ void UpbitWebSocket::parse_orderbook(const nlohmann::json& data) {
         std::chrono::milliseconds(timestamp_ms)
     );
     
-    logger_->debug("[Upbit] OrderBook parsed - Symbol: {}, Bids: {}, Asks: {}, BestBid: {}, BestAsk: {}", 
-                  orderbook.symbol, orderbook.bids.size(), orderbook.asks.size(), 
+    logger_->debug("[Upbit] OrderBook - Symbol: {}, Bids: {}, Asks: {}, BestBid: {}, BestAsk: {}",
+                  orderbook.symbol, orderbook.bids.size(), orderbook.asks.size(),
                   orderbook.best_bid(), orderbook.best_ask());
     
     WebSocketEvent evt(WebSocketEvent::Type::OrderBook, Exchange::Upbit, orderbook);
@@ -210,9 +210,12 @@ void UpbitWebSocket::parse_trade(const nlohmann::json& data) {
     trade.timestamp = std::chrono::system_clock::time_point(
         std::chrono::milliseconds(timestamp_ms)
     );
-    
+
+    logger_->info("[Upbit] Trade - Code: {}, Price: {} KRW, Vol: {}",
+                  trade.symbol, trade.price, trade.volume_24h);
+
     WebSocketEvent evt(WebSocketEvent::Type::Trade, Exchange::Upbit, trade);
-    
+
     emit_event(std::move(evt));
 }
 

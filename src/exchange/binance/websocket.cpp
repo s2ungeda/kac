@@ -127,7 +127,7 @@ void BinanceWebSocket::parse_ticker(const nlohmann::json& data) {
         std::chrono::milliseconds(timestamp_ms)
     );
     
-    logger_->info("[Binance] Ticker parsed - Symbol: {}, Price: {} USDT",
+    logger_->info("[Binance] Ticker - Symbol: {}, Price: {} USDT",
                   ticker.symbol, ticker.price);
 
     WebSocketEvent evt(WebSocketEvent::Type::Ticker, Exchange::Binance, ticker);
@@ -205,7 +205,7 @@ void BinanceWebSocket::parse_trade(const nlohmann::json& data) {
         std::chrono::milliseconds(timestamp_ms)
     );
     
-    logger_->info("[Binance] Trade parsed - Symbol: {}, Price: {} USDT",
+    logger_->info("[Binance] Trade - Symbol: {}, Price: {} USDT",
                   trade.symbol, trade.price);
 
     WebSocketEvent evt(WebSocketEvent::Type::Trade, Exchange::Binance, trade);
