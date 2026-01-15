@@ -164,8 +164,8 @@ bool Config::load(const std::string& path) {
     
     ExchangeConfig binance_cfg;
     binance_cfg.enabled = true;
-    binance_cfg.ws_url = "wss://stream.binance.com:9443/ws";
-    binance_cfg.rest_url = "https://api.binance.com";
+    binance_cfg.ws_url = "wss://dstream.binance.com/ws";  // COIN-M Futures
+    binance_cfg.rest_url = "https://dapi.binance.com";    // COIN-M Futures REST
     exchanges_[Exchange::Binance] = binance_cfg;
     
     ExchangeConfig bithumb_cfg;

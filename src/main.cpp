@@ -288,7 +288,7 @@ int main(int argc, char* argv[]) {
     });
 
     bithumb_ws->on_event([&](const WebSocketEvent& evt) {
-        if (evt.is_ticker()) {
+        if (evt.is_ticker() || evt.is_trade()) {
             double price = evt.ticker().price;
             price_bithumb = price;
             calculator.update_price(Exchange::Bithumb, price);
@@ -318,17 +318,22 @@ int main(int argc, char* argv[]) {
 
     upbit_ws->subscribe_ticker({symbol.upbit});
     binance_ws->subscribe_trade({symbol.binance});
-    bithumb_ws->subscribe_ticker({symbol.bithumb});
+    bithumb_ws->subscribe_trade({symbol.bithumb});
     mexc_ws->subscribe_trade({symbol.mexc});
 
     // WebSocket 연결
     std::cout << "Connecting to exchanges...\n";
     upbit_ws->connect("api.upbit.com", "443", "/websocket/v1");
-    // Binance는 소문자 심볼 필요
-    std::string binance_symbol_lower = symbol.binance;
-    std::transform(binance_symbol_lower.begin(), binance_symbol_lower.end(),
-                   binance_symbol_lower.begin(), ::tolower);
-    binance_ws->connect("stream.binance.com", "9443", "/stream?streams=" + binance_symbol_lower + "@aggTrade");
+    // Binance COIN-M Futures: XRPUSDT -> xrpusd_perp
+    std::string binance_coinm_symbol = symbol.binance;
+    // USDT를 USD_PERP로 변환
+    size_t usdt_pos = binance_coinm_symbol.find("USDT");
+    if (usdt_pos != std::string::npos) {
+        binance_coinm_symbol = binance_coinm_symbol.substr(0, usdt_pos) + "USD_PERP";
+    }
+    std::transform(binance_coinm_symbol.begin(), binance_coinm_symbol.end(),
+                   binance_coinm_symbol.begin(), ::tolower);
+    binance_ws->connect("dstream.binance.com", "443", "/stream?streams=" + binance_coinm_symbol + "@aggTrade");
     bithumb_ws->connect("pubwss.bithumb.com", "443", "/pub/ws");
     mexc_ws->connect("contract.mexc.com", "443", "/edge");
 
