@@ -126,6 +126,17 @@
   - 환율 자동 갱신 (30초 주기)
   - Ctrl+C 시그널로 안전한 종료
   - Binance 소문자 심볼 처리 수정
+- 파일 로깅 기능 추가
+  - Logger 클래스에 날짜 기반 로그 파일 저장 기능 추가
+  - logs/arbitrage_YYYY-MM-DD.log 형식
+- Binance aggTrade 스트림으로 변경
+  - @ticker → @aggTrade로 변경하여 실시간 체결 데이터 수신
+  - is_trade() 메서드 추가 (WebSocketEvent)
+- 4개 거래소 실시간 데이터 수신 확인
+  - Upbit: Ticker (체결마다) ✅
+  - Bithumb: Ticker (체결마다) ✅
+  - Binance: Trade (aggTrade) ✅
+  - MEXC: Trade (체결마다) ✅
 
 ---
 
