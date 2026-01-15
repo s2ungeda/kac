@@ -11,306 +11,242 @@ BithumbWebSocket::BithumbWebSocket(net::io_context& ioc, ssl::context& ctx)
 }
 
 void BithumbWebSocket::subscribe_ticker(const std::vector<std::string>& symbols) {
-    ticker_symbols_ = symbols;
+    // 심볼 형식 변환: XRP_KRW -> KRW-XRP
+    for (const auto& sym : symbols) {
+        ticker_codes_.push_back(convert_to_v2_code(sym));
+    }
 }
 
 void BithumbWebSocket::subscribe_orderbook(const std::vector<std::string>& symbols) {
-    orderbook_symbols_ = symbols;
+    for (const auto& sym : symbols) {
+        orderbook_codes_.push_back(convert_to_v2_code(sym));
+    }
 }
 
 void BithumbWebSocket::subscribe_trade(const std::vector<std::string>& symbols) {
-    trade_symbols_ = symbols;
+    for (const auto& sym : symbols) {
+        trade_codes_.push_back(convert_to_v2_code(sym));
+    }
+}
+
+// 심볼 변환: XRP_KRW -> KRW-XRP
+std::string BithumbWebSocket::convert_to_v2_code(const std::string& symbol) {
+    // 이미 KRW- 형식이면 그대로 반환
+    if (symbol.find("KRW-") == 0) {
+        return symbol;
+    }
+
+    // XRP_KRW -> KRW-XRP
+    size_t pos = symbol.find("_KRW");
+    if (pos != std::string::npos) {
+        return "KRW-" + symbol.substr(0, pos);
+    }
+
+    // XRPKRW -> KRW-XRP
+    pos = symbol.find("KRW");
+    if (pos != std::string::npos && pos > 0) {
+        return "KRW-" + symbol.substr(0, pos);
+    }
+
+    return symbol;
 }
 
 std::string BithumbWebSocket::build_subscribe_message() {
-    // 빗썸은 각 구독을 개별적으로 보내야 함
-    // 첫 번째로 ticker 구독 메시지를 반환
-    if (!ticker_symbols_.empty()) {
-        nlohmann::json msg = {
+    // 빗썸 v2 API 형식: [ticket, type, format]
+    nlohmann::json msg = nlohmann::json::array();
+
+    // Ticket field
+    msg.push_back({{"ticket", "arbitrage-cpp"}});
+
+    // Type field - trade 우선
+    if (!trade_codes_.empty()) {
+        msg.push_back({
+            {"type", "trade"},
+            {"codes", trade_codes_},
+            {"isOnlyRealtime", true}
+        });
+    } else if (!ticker_codes_.empty()) {
+        msg.push_back({
             {"type", "ticker"},
-            {"symbols", ticker_symbols_},
-            {"tickTypes", nlohmann::json::array({"24H"})}
-        };
-        return msg.dump();
+            {"codes", ticker_codes_},
+            {"isOnlyRealtime", true}
+        });
+    } else if (!orderbook_codes_.empty()) {
+        msg.push_back({
+            {"type", "orderbook"},
+            {"codes", orderbook_codes_},
+            {"isOnlyRealtime", true}
+        });
     }
-    
-    // ticker가 없으면 orderbook 구독
-    if (!orderbook_symbols_.empty()) {
-        nlohmann::json msg = {
-            {"type", "orderbookdepth"},
-            {"symbols", orderbook_symbols_}
-        };
-        return msg.dump();
-    }
-    
-    // 둘 다 없으면 transaction 구독
-    if (!trade_symbols_.empty()) {
-        nlohmann::json msg = {
-            {"type", "transaction"},
-            {"symbols", trade_symbols_}
-        };
-        return msg.dump();
-    }
-    
-    return "";
+
+    // Format field
+    msg.push_back({{"format", "DEFAULT"}});
+
+    return msg.dump();
 }
 
 void BithumbWebSocket::parse_message(const std::string& message) {
     try {
         auto json = nlohmann::json::parse(message);
-        
-        // 디버깅을 위해 메시지 출력 - 제거됨
-        
-        // 연결 성공 메시지 처리
-        if (json.contains("status") && json["status"] == "0000") {
-            if (json.contains("resmsg")) {
-                std::string msg = json["resmsg"];
-                if (msg == "Connected Successfully") {
-                    // 연결 성공 - 이미 첫 구독은 보냈으므로 추가 구독 전송
-                    send_additional_subscriptions();
-                    return;
-                } else if (msg == "Filter Registered Successfully") {
-                    // 구독 성공
-                    logger_->info("[Bithumb] Filter registered successfully");
-                    return;
-                }
-            }
-        }
-        
-        // Bithumb는 type과 content 필드를 사용
-        if (!json.contains("type")) {
-            logger_->warn("[Bithumb] Message has no type field");
+
+        // 에러 응답 처리
+        if (json.contains("error")) {
+            logger_->error("[Bithumb] Error: {}", json.dump());
             return;
         }
-        
-        std::string type = json["type"];
-        
-        if (type == "ticker") {
-            parse_ticker(json);
-        } else if (type == "orderbookdepth") {
-            parse_orderbook(json);
-        } else if (type == "transaction") {
-            parse_trade(json);
-        } else {
-            logger_->debug("[Bithumb] Unknown message type: {}", type);
+
+        // type 필드 확인
+        if (!json.contains("type")) {
+            // status 응답 (연결 확인 등)
+            if (json.contains("status") && json["status"] == "UP") {
+                logger_->info("[Bithumb] Connection status: UP");
+            }
+            return;
         }
-        
+
+        std::string type = json["type"];
+
+        if (type == "trade") {
+            parse_trade_v2(json);
+        } else if (type == "ticker") {
+            parse_ticker_v2(json);
+        } else if (type == "orderbook") {
+            parse_orderbook_v2(json);
+        }
+
     } catch (const std::exception& e) {
         logger_->error("[Bithumb] Parse error: {}", e.what());
     }
 }
 
-void BithumbWebSocket::parse_ticker(const nlohmann::json& data) {
-    if (!data.contains("content")) {
-        return;
+void BithumbWebSocket::parse_trade_v2(const nlohmann::json& json) {
+    Ticker trade;
+    trade.exchange = Exchange::Bithumb;
+
+    // code: "KRW-XRP" -> symbol 저장
+    if (json.contains("code")) {
+        trade.symbol = json["code"].get<std::string>();
     }
-    
-    auto content = data["content"];
-    
-    // content가 배열인 경우 처리
-    if (content.is_array()) {
-        for (const auto& item : content) {
-            parse_single_ticker(item);
+
+    // trade_price: 체결가
+    if (json.contains("trade_price")) {
+        trade.price = json["trade_price"].get<double>();
+        trade.bid = trade.price;
+        trade.ask = trade.price;
+    }
+
+    // trade_volume: 체결량
+    if (json.contains("trade_volume")) {
+        trade.volume_24h = json["trade_volume"].get<double>();
+    }
+
+    // trade_timestamp: 타임스탬프 (밀리초)
+    if (json.contains("trade_timestamp")) {
+        int64_t ts = json["trade_timestamp"].get<int64_t>();
+        trade.timestamp = std::chrono::system_clock::time_point(
+            std::chrono::milliseconds(ts)
+        );
+    } else {
+        trade.timestamp = std::chrono::system_clock::now();
+    }
+
+    // stream_type 확인 (REALTIME만 처리)
+    if (json.contains("stream_type")) {
+        std::string stream_type = json["stream_type"];
+        if (stream_type == "SNAPSHOT") {
+            return;  // 스냅샷은 무시
         }
-        return;
     }
-    
-    // content가 객체인 경우 처리
-    parse_single_ticker(content);
+
+    logger_->info("[Bithumb] Trade - Code: {}, Price: {} KRW, Vol: {}",
+                  trade.symbol, trade.price, trade.volume_24h);
+
+    // Trade 이벤트
+    WebSocketEvent trade_evt(WebSocketEvent::Type::Trade, Exchange::Bithumb, trade);
+    emit_event(std::move(trade_evt));
+
+    // Ticker로도 emit (premium calculator용)
+    Ticker ticker = trade;
+    WebSocketEvent ticker_evt(WebSocketEvent::Type::Ticker, Exchange::Bithumb, ticker);
+    emit_event(std::move(ticker_evt));
 }
 
-void BithumbWebSocket::parse_single_ticker(const nlohmann::json& content) {
-    // 실제 데이터 구조 확인을 위한 디버깅 - 제거됨
-    
-    // 필수 필드 체크 - 빗썸 ticker는 호가 정보 없음
-    if (!content.contains("symbol") || !content.contains("closePrice")) {
-        logger_->warn("[Bithumb] Missing required fields in ticker data: {}", content.dump());
-        return;
-    }
+void BithumbWebSocket::parse_ticker_v2(const nlohmann::json& json) {
     Ticker ticker;
     ticker.exchange = Exchange::Bithumb;
-    
-    // null 체크와 함께 값 가져오기
-    if (!content["symbol"].is_null()) {
-        ticker.symbol = content["symbol"].get<std::string>();
-    } else {
-        return;
+
+    if (json.contains("code")) {
+        ticker.symbol = json["code"].get<std::string>();
     }
-    
-    // 가격 정보 파싱
-    if (!content["closePrice"].is_null()) {
-        ticker.price = std::stod(content["closePrice"].get<std::string>());
-        // 빗썸 ticker는 호가 정보를 제공하지 않으므로 closePrice를 사용
+
+    // trade_price: 현재가
+    if (json.contains("trade_price")) {
+        ticker.price = json["trade_price"].get<double>();
+    }
+
+    // best_bid_price, best_ask_price
+    if (json.contains("best_bid_price")) {
+        ticker.bid = json["best_bid_price"].get<double>();
+    } else {
         ticker.bid = ticker.price;
+    }
+    if (json.contains("best_ask_price")) {
+        ticker.ask = json["best_ask_price"].get<double>();
+    } else {
         ticker.ask = ticker.price;
     }
-    
-    // 거래량 정보
-    if (content.contains("volume") && !content["volume"].is_null()) {
-        ticker.volume_24h = std::stod(content["volume"].get<std::string>());
+
+    // acc_trade_volume_24h: 24시간 거래량
+    if (json.contains("acc_trade_volume_24h")) {
+        ticker.volume_24h = json["acc_trade_volume_24h"].get<double>();
     }
-    
-    // 현재는 간단히 현재 시간 사용
+
     ticker.timestamp = std::chrono::system_clock::now();
-    
-    WebSocketEvent evt(WebSocketEvent::Type::Ticker, Exchange::Bithumb, ticker);
-    
-    logger_->info("[Bithumb] Ticker parsed - Symbol: {}, Price: {} KRW", 
+
+    logger_->info("[Bithumb] Ticker - Code: {}, Price: {} KRW",
                   ticker.symbol, ticker.price);
-    
+
+    WebSocketEvent evt(WebSocketEvent::Type::Ticker, Exchange::Bithumb, ticker);
     emit_event(std::move(evt));
 }
 
-void BithumbWebSocket::parse_orderbook(const nlohmann::json& data) {
-    if (!data.contains("content")) {
-        logger_->warn("[Bithumb] No content field in orderbook data");
-        return;
-    }
-    
-    auto content = data["content"];
-    
-    // content가 배열인지 객체인지 확인
-    if (content.is_array()) {
-        // content가 배열인 경우 - 여러 심볼의 데이터
-        for (const auto& item : content) {
-            parse_single_orderbook(item);
-        }
-        return;
-    }
-    
-    // content가 객체인 경우 - 단일 심볼의 데이터
-    parse_single_orderbook(content);
-}
+void BithumbWebSocket::parse_orderbook_v2(const nlohmann::json& json) {
+    OrderBook orderbook;
+    orderbook.exchange = Exchange::Bithumb;
 
-void BithumbWebSocket::parse_single_orderbook(const nlohmann::json& content) {
-    // 빗썸의 실제 orderbook 데이터 구조:
-    // {"datetime":"...", "list":[{"orderType":"bid", "price":"...", "quantity":"...", "symbol":"..."}, ...]}
-    
-    if (!content.contains("list") || !content["list"].is_array()) {
-        logger_->warn("[Bithumb] No list field in orderbook data: {}", content.dump());
-        return;
+    if (json.contains("code")) {
+        orderbook.symbol = json["code"].get<std::string>();
     }
-    
-    // symbol별로 orderbook 데이터를 그룹화
-    std::map<std::string, OrderBook> orderbooks;
-    
-    for (const auto& item : content["list"]) {
-        if (!item.contains("symbol") || !item.contains("orderType") ||
-            !item.contains("price") || !item.contains("quantity")) {
-            continue;
-        }
-        
-        std::string symbol = item["symbol"].get<std::string>();
-        std::string orderType = item["orderType"].get<std::string>();
-        
-        // OrderBook 객체 생성 또는 가져오기
-        if (orderbooks.find(symbol) == orderbooks.end()) {
-            orderbooks[symbol] = OrderBook();
-            orderbooks[symbol].exchange = Exchange::Bithumb;
-            orderbooks[symbol].symbol = symbol;
-            orderbooks[symbol].timestamp = std::chrono::system_clock::now();
-        }
-        
-        PriceLevel level;
-        level.price = std::stod(item["price"].get<std::string>());
-        level.quantity = std::stod(item["quantity"].get<std::string>());
-        
-        if (orderType == "bid") {
-            orderbooks[symbol].bids.push_back(level);
-        } else if (orderType == "ask") {
-            orderbooks[symbol].asks.push_back(level);
-        }
-    }
-    
-    // 각 심볼별로 이벤트 발생
-    for (auto& [symbol, orderbook] : orderbooks) {
-        // 가격순으로 정렬 (bid는 내림차순, ask는 오름차순)
-        std::sort(orderbook.bids.begin(), orderbook.bids.end(),
-                  [](const PriceLevel& a, const PriceLevel& b) { return a.price > b.price; });
-        std::sort(orderbook.asks.begin(), orderbook.asks.end(),
-                  [](const PriceLevel& a, const PriceLevel& b) { return a.price < b.price; });
-        
-        // OrderBook 파싱 결과 출력
-        if (!orderbook.bids.empty() && !orderbook.asks.empty()) {
-            logger_->info("[Bithumb] OrderBook parsed - Symbol: {}, Best Bid: {} KRW, Best Ask: {} KRW",
-                         orderbook.symbol, orderbook.bids[0].price, orderbook.asks[0].price);
-        }
-        
-        WebSocketEvent evt(WebSocketEvent::Type::OrderBook, Exchange::Bithumb, orderbook);
-        
-        emit_event(std::move(evt));
-    }
-}
 
-void BithumbWebSocket::parse_trade(const nlohmann::json& data) {
-    if (!data.contains("content")) {
-        return;
-    }
-    
-    auto content = data["content"];
-    
-    // Bithumb는 transaction 데이터를 리스트로 제공
-    if (content.contains("list") && content["list"].is_array()) {
-        for (const auto& transaction : content["list"]) {
-            Ticker trade;
-            trade.exchange = Exchange::Bithumb;
-            
-            // 심볼
-            if (transaction.contains("symbol")) {
-                trade.symbol = transaction["symbol"];
+    // orderbook_units: [{ask_price, bid_price, ask_size, bid_size}, ...]
+    if (json.contains("orderbook_units") && json["orderbook_units"].is_array()) {
+        for (const auto& unit : json["orderbook_units"]) {
+            // Ask
+            if (unit.contains("ask_price") && unit.contains("ask_size")) {
+                PriceLevel ask;
+                ask.price = unit["ask_price"].get<double>();
+                ask.quantity = unit["ask_size"].get<double>();
+                orderbook.asks.push_back(ask);
             }
-            
-            // 체결가
-            if (transaction.contains("contPrice")) {
-                trade.price = std::stod(transaction["contPrice"].get<std::string>());
-                // Bithumb trade에는 bid/ask 정보가 없으므로 체결가로 설정
-                trade.bid = trade.price;
-                trade.ask = trade.price;
+            // Bid
+            if (unit.contains("bid_price") && unit.contains("bid_size")) {
+                PriceLevel bid;
+                bid.price = unit["bid_price"].get<double>();
+                bid.quantity = unit["bid_size"].get<double>();
+                orderbook.bids.push_back(bid);
             }
-            
-            // 체결량
-            if (transaction.contains("contQty")) {
-                trade.volume_24h = std::stod(transaction["contQty"].get<std::string>());
-            }
-            
-            // 타임스탬프
-            if (transaction.contains("contDtm")) {
-                // Bithumb는 microsecond timestamp 사용
-                int64_t timestamp_us = std::stoll(transaction["contDtm"].get<std::string>());
-                trade.timestamp = std::chrono::system_clock::time_point(
-                    std::chrono::microseconds(timestamp_us)
-                );
-            }
-            
-            logger_->info("[Bithumb] Trade parsed - Symbol: {}, Price: {} KRW, Volume: {}",
-                         trade.symbol, trade.price, trade.volume_24h);
-            
-            WebSocketEvent evt(WebSocketEvent::Type::Trade, Exchange::Bithumb, trade);
-            emit_event(std::move(evt));
         }
     }
-}
 
-void BithumbWebSocket::send_additional_subscriptions() {
-    // orderbook 구독이 있고 아직 보내지 않았으면
-    if (!orderbook_symbols_.empty() && !orderbook_subscribed_) {
-        nlohmann::json msg = {
-            {"type", "orderbookdepth"},
-            {"symbols", orderbook_symbols_}
-        };
-        send_message(msg.dump());
-        orderbook_subscribed_ = true;
+    orderbook.timestamp = std::chrono::system_clock::now();
+
+    if (!orderbook.bids.empty() && !orderbook.asks.empty()) {
+        logger_->debug("[Bithumb] OrderBook - Best Bid: {}, Best Ask: {}",
+                      orderbook.bids[0].price, orderbook.asks[0].price);
     }
-    
-    // transaction 구독이 있고 아직 보내지 않았으면
-    if (!trade_symbols_.empty() && !trade_subscribed_) {
-        nlohmann::json msg = {
-            {"type", "transaction"},
-            {"symbols", trade_symbols_}
-        };
-        send_message(msg.dump());
-        trade_subscribed_ = true;
-    }
+
+    WebSocketEvent evt(WebSocketEvent::Type::OrderBook, Exchange::Bithumb, orderbook);
+    emit_event(std::move(evt));
 }
 
 }  // namespace arbitrage

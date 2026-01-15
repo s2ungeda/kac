@@ -170,7 +170,7 @@ bool Config::load(const std::string& path) {
     
     ExchangeConfig bithumb_cfg;
     bithumb_cfg.enabled = true;
-    bithumb_cfg.ws_url = "wss://pubwss.bithumb.com/pub/ws";
+    bithumb_cfg.ws_url = "wss://ws-api.bithumb.com/websocket/v1";  // v2 API
     bithumb_cfg.rest_url = "https://api.bithumb.com";
     exchanges_[Exchange::Bithumb] = bithumb_cfg;
     

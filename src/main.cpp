@@ -329,7 +329,7 @@ int main(int argc, char* argv[]) {
     std::transform(binance_symbol_lower.begin(), binance_symbol_lower.end(),
                    binance_symbol_lower.begin(), ::tolower);
     binance_ws->connect("fstream.binance.com", "443", "/stream?streams=" + binance_symbol_lower + "@aggTrade");
-    bithumb_ws->connect("pubwss.bithumb.com", "443", "/pub/ws");
+    bithumb_ws->connect("ws-api.bithumb.com", "443", "/websocket/v1");
     mexc_ws->connect("contract.mexc.com", "443", "/edge");
 
     // IO 스레드 시작
