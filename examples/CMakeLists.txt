@@ -125,3 +125,12 @@ endif()
 if(CURL_FOUND)
     target_link_libraries(data_logger PRIVATE ${CURL_LIBRARIES})
 endif()
+
+# Low Latency Infrastructure Test
+add_executable(lowlatency_test lowlatency_test.cpp)
+
+target_link_libraries(lowlatency_test
+    PRIVATE
+        common
+        Threads::Threads
+)
