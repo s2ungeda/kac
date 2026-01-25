@@ -134,3 +134,12 @@ target_link_libraries(lowlatency_test
         common
         Threads::Threads
 )
+
+# Rate Limiter & JSON Parser Test
+add_executable(rate_limiter_test rate_limiter_test.cpp)
+
+target_link_libraries(rate_limiter_test
+    PRIVATE
+        common
+        Threads::Threads
+)
