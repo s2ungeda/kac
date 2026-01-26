@@ -7,7 +7,7 @@
 
 ## 📅 마지막 업데이트
 - 날짜: 2026-01-26
-- 세션: #7
+- 세션: #8
 
 ---
 
@@ -85,6 +85,30 @@
   - Bithumb/MEXC WebSocket 구현
   - Protobuf 파서 추가 (MEXC용)
 - 각종 테스트 프로그램 작성
+
+### 세션 #8 (2026-01-26)
+- Low-Latency Core Optimization 완료
+  - Cache-line alignment (alignas(64)) 적용
+    - Ticker: 64 bytes = 1 cache line
+    - OrderBook, OrderRequest, OrderResult, Balance: aligned
+  - Zero-copy 지원
+    - std::string → 고정 크기 char[] 변경
+    - set_symbol(), set_order_id() 등 헬퍼 함수 추가
+    - timestamp_us (int64_t 마이크로초) 사용
+  - Deterministic Memory Pool
+    - 힙 fallback 제거 (nullptr 반환)
+    - 예측 가능한 O(1) 할당/해제
+  - 전체 코드 업데이트
+    - WebSocket 파서 (upbit, binance, bithumb, mexc)
+    - Order 클라이언트 (upbit, binance)
+    - Fast JSON Parser
+    - 예제 프로그램 (lowlatency_test, order_example)
+  - CLAUDE_CODE_RULES.md 저지연 가이드라인 추가
+  - 테스트 결과
+    - SPSC Queue: 0.8ns Push+Pop
+    - Memory Pool: 2.6x 속도 향상 (16.8ns vs new/delete 43.9ns)
+    - JSON Parser: 744,014 parses/sec
+  - 커밋: 761535a refactor: Apply low-latency core optimization
 
 ### 세션 #7 (2026-01-26)
 - TASK_07 Rate Limiter + Parser 완료
@@ -200,6 +224,10 @@
    - 양방향 주문 (Buy/Sell) 동시 실행
    - 주문 결과 집계 및 에러 처리
 
+2. 추가 저지연 최적화 (선택)
+   - SIMD 가속 (simdjson 적용)
+   - CPU Affinity (스레드 코어 고정)
+
 ---
 
 ## 🔧 개발 환경 상태
@@ -208,7 +236,7 @@
 - 컴파일러: g++ 9.4.0
 - CMake: 3.16.3
 - 빌드 상태: ✅ 성공
-- 테스트 상태: ⬜ 미구현
+- 테스트 상태: ✅ lowlatency_test, rate_limiter_test 통과
 
 ---
 

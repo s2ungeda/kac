@@ -7,7 +7,8 @@
 #include <new>
 #include <stdexcept>
 #include <type_traits>
-#include "arbitrage/common/types.hpp"  // For CACHE_LINE_SIZE
+#include "arbitrage/common/types.hpp"     // For CACHE_LINE_SIZE
+#include "arbitrage/common/compiler.hpp"  // For LIKELY/UNLIKELY, FORCE_INLINE
 
 namespace arbitrage {
 
@@ -55,41 +56,41 @@ public:
     }
     
     // Producer: 요소 추가
-    bool push(const T& item) {
+    HOT_FUNCTION bool push(const T& item) {
         const size_t head = head_.load(std::memory_order_relaxed);
         const size_t next = (head + 1) & mask_;
-        
-        if (next == tail_.load(std::memory_order_acquire)) {
+
+        if (UNLIKELY(next == tail_.load(std::memory_order_acquire))) {
             return false;  // Full
         }
-        
+
         buffer_[head] = item;
         head_.store(next, std::memory_order_release);
         return true;
     }
-    
+
     // Producer: 요소 추가 (move)
-    bool push(T&& item) {
+    HOT_FUNCTION bool push(T&& item) {
         const size_t head = head_.load(std::memory_order_relaxed);
         const size_t next = (head + 1) & mask_;
-        
-        if (next == tail_.load(std::memory_order_acquire)) {
+
+        if (UNLIKELY(next == tail_.load(std::memory_order_acquire))) {
             return false;  // Full
         }
-        
+
         buffer_[head] = std::move(item);
         head_.store(next, std::memory_order_release);
         return true;
     }
-    
+
     // Consumer: 요소 추출
-    bool pop(T& item) {
+    HOT_FUNCTION bool pop(T& item) {
         const size_t tail = tail_.load(std::memory_order_relaxed);
-        
-        if (tail == head_.load(std::memory_order_acquire)) {
+
+        if (UNLIKELY(tail == head_.load(std::memory_order_acquire))) {
             return false;  // Empty
         }
-        
+
         item = std::move(buffer_[tail]);
         tail_.store((tail + 1) & mask_, std::memory_order_release);
         return true;
@@ -287,14 +288,14 @@ public:
      * @param ptr 전달할 포인터 (non-null)
      * @return 성공 시 true, 큐가 가득 찬 경우 false
      */
-    bool push(T* ptr) noexcept {
-        if (!ptr) return false;
+    HOT_FUNCTION bool push(T* ptr) noexcept {
+        if (UNLIKELY(!ptr)) return false;
 
         const size_t head = head_.load(std::memory_order_relaxed);
         const size_t next = (head + 1) & mask_;
 
         // 큐가 가득 찼는지 확인
-        if (next == tail_.load(std::memory_order_acquire)) {
+        if (UNLIKELY(next == tail_.load(std::memory_order_acquire))) {
             return false;
         }
 
@@ -310,11 +311,11 @@ public:
      * 포인터 팝 (소유권 획득)
      * @return 포인터 또는 nullptr (큐가 비어있는 경우)
      */
-    T* pop() noexcept {
+    HOT_FUNCTION T* pop() noexcept {
         const size_t tail = tail_.load(std::memory_order_relaxed);
 
         // 큐가 비어있는지 확인
-        if (tail == head_.load(std::memory_order_acquire)) {
+        if (UNLIKELY(tail == head_.load(std::memory_order_acquire))) {
             return nullptr;
         }
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "arbitrage/common/compiler.hpp"
 #include <atomic>
 #include <memory>
 #include <cstddef>
@@ -54,8 +55,8 @@ public:
      * 메모리 블록 반환
      * @param ptr 반환할 블록 포인터
      */
-    void deallocate(void* ptr) noexcept {
-        if (ptr) {
+    FORCE_INLINE void deallocate(void* ptr) noexcept {
+        if (LIKELY(ptr)) {
             push_free(ptr);
         }
     }
@@ -160,9 +161,9 @@ public:
      * 주의: nullptr 반환 시 적절한 처리 필요!
      */
     template <typename... Args>
-    T* create(Args&&... args) noexcept {
+    HOT_FUNCTION T* create(Args&&... args) noexcept {
         void* mem = pool_.allocate();
-        if (!mem) {
+        if (UNLIKELY(!mem)) {
             ++exhausted_count_;
             return nullptr;  // 런타임 할당 없음!
         }
@@ -173,9 +174,9 @@ public:
      * 객체 생성 (기본 생성자)
      * @return 생성된 객체 포인터, 풀 소진 시 nullptr
      */
-    T* acquire() noexcept {
+    HOT_FUNCTION T* acquire() noexcept {
         void* mem = pool_.allocate();
-        if (!mem) {
+        if (UNLIKELY(!mem)) {
             ++exhausted_count_;
             return nullptr;
         }
@@ -186,8 +187,8 @@ public:
      * 객체 소멸 및 풀에 반환
      * @param obj 소멸할 객체 포인터
      */
-    void destroy(T* obj) noexcept {
-        if (!obj) return;
+    HOT_FUNCTION void destroy(T* obj) noexcept {
+        if (UNLIKELY(!obj)) return;
 
         // 소멸자 호출
         obj->~T();
