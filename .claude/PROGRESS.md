@@ -7,7 +7,7 @@
 
 ## 📅 마지막 업데이트
 - 날짜: 2026-01-26
-- 세션: #8
+- 세션: #9
 
 ---
 
@@ -86,6 +86,27 @@
   - Protobuf 파서 추가 (MEXC용)
 - 각종 테스트 프로그램 작성
 
+### 세션 #9 (2026-01-26)
+- 최적화 리뷰 및 과도한 부분 롤백
+  - 유지된 좋은 부분:
+    - alignas(64) 캐시 라인 정렬
+    - types.hpp char[] + 헬퍼 함수 디자인
+    - ObjectPool, SpinLock/SpinWait, ZeroCopyQueue
+    - LIKELY/UNLIKELY, HOT_FUNCTION 매크로
+  - 수정된 위험/과도한 부분:
+    - memory_pool.hpp: 힙 fallback 복원 (안전성)
+      - nullptr 대신 힙 할당으로 변경
+      - heap_fallback_count() 모니터링 추가
+    - compiler.hpp: 미사용 매크로 제거 (YAGNI)
+      - 114줄 → 54줄 (-60줄)
+      - PREFETCH_*, UNREACHABLE, ASSUME, RESTRICT 제거
+    - fee_constants.hpp: 기본값 경고 추가
+  - 테스트 결과
+    - SPSC Queue: 1.0ns Push+Pop
+    - Memory Pool: 2.3x 속도 향상 (16.4ns vs 37.4ns)
+    - 모든 테스트 통과
+  - 커밋: 1dfaae0 refactor: Restore heap fallback and remove unused macros
+
 ### 세션 #8 (2026-01-26)
 - Low-Latency Core Optimization 완료
   - Cache-line alignment (alignas(64)) 적용
@@ -95,9 +116,7 @@
     - std::string → 고정 크기 char[] 변경
     - set_symbol(), set_order_id() 등 헬퍼 함수 추가
     - timestamp_us (int64_t 마이크로초) 사용
-  - Deterministic Memory Pool
-    - 힙 fallback 제거 (nullptr 반환)
-    - 예측 가능한 O(1) 할당/해제
+  - Memory Pool 힙 fallback 복원 (세션 #9에서 수정)
   - 전체 코드 업데이트
     - WebSocket 파서 (upbit, binance, bithumb, mexc)
     - Order 클라이언트 (upbit, binance)
