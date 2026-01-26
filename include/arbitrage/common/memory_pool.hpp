@@ -123,22 +123,20 @@ private:
 
 
 /**
- * 타입 안전 객체 풀 (Deterministic, No Fallback)
+ * 타입 안전 객체 풀 (Heap Fallback 지원)
  *
  * 특징:
  * - 특정 타입 T에 최적화
  * - Lock-Free 생성/소멸
- * - 런타임 할당 없음: 풀 소진 시 nullptr 반환 (fallback 제거)
- * - Deterministic Performance: 모든 할당이 O(1)
+ * - Fallback: 풀 소진 시 힙 할당 (경고 카운트 증가)
+ * - 대부분의 할당은 O(1), fallback 시 힙 할당
  *
  * 사용 예:
  *   ObjectPool<Ticker, 4096> pool;
- *   Ticker* t = pool.create();  // nullptr일 수 있음!
- *   if (t) {
- *       t->price = 50000.0;
- *       // ... 사용 후 반환
- *       pool.destroy(t);
- *   }
+ *   Ticker* t = pool.create();  // 항상 유효한 포인터 반환
+ *   t->price = 50000.0;
+ *   // ... 사용 후 반환
+ *   pool.destroy(t);
  *
  * @tparam T 객체 타입
  * @tparam PoolSize 풀 크기 (기본 1024)
@@ -154,41 +152,48 @@ public:
     ObjectPool& operator=(const ObjectPool&) = delete;
 
     /**
-     * 객체 생성 (Deterministic)
+     * 객체 생성
      * @param args 생성자 인자
-     * @return 생성된 객체 포인터, 풀 소진 시 nullptr
-     *
-     * 주의: nullptr 반환 시 적절한 처리 필요!
+     * @return 생성된 객체 포인터 (항상 유효, fallback 시 힙 할당)
      */
     template <typename... Args>
-    HOT_FUNCTION T* create(Args&&... args) noexcept {
+    HOT_FUNCTION T* create(Args&&... args) {
         void* mem = pool_.allocate();
         if (UNLIKELY(!mem)) {
-            ++exhausted_count_;
-            return nullptr;  // 런타임 할당 없음!
+            // Fallback: 힙 할당 (경고 카운트 증가)
+            ++heap_fallback_count_;
+            return new T(std::forward<Args>(args)...);
         }
         return new (mem) T(std::forward<Args>(args)...);
     }
 
     /**
      * 객체 생성 (기본 생성자)
-     * @return 생성된 객체 포인터, 풀 소진 시 nullptr
+     * @return 생성된 객체 포인터 (항상 유효)
      */
-    HOT_FUNCTION T* acquire() noexcept {
+    HOT_FUNCTION T* acquire() {
         void* mem = pool_.allocate();
         if (UNLIKELY(!mem)) {
-            ++exhausted_count_;
-            return nullptr;
+            ++heap_fallback_count_;
+            return new T();
         }
         return new (mem) T();
     }
 
     /**
-     * 객체 소멸 및 풀에 반환
+     * 객체 소멸 및 메모리 반환
      * @param obj 소멸할 객체 포인터
+     * @param from_heap 힙에서 할당된 객체인지 여부 (기본: false)
+     *
+     * 주의: from_heap=true로 호출 시 delete 사용
      */
-    HOT_FUNCTION void destroy(T* obj) noexcept {
+    HOT_FUNCTION void destroy(T* obj, bool from_heap = false) noexcept {
         if (UNLIKELY(!obj)) return;
+
+        if (UNLIKELY(from_heap)) {
+            delete obj;
+            return;
+        }
 
         // 소멸자 호출
         obj->~T();
@@ -200,8 +205,8 @@ public:
     /**
      * release의 별칭 (destroy와 동일)
      */
-    void release(T* obj) noexcept {
-        destroy(obj);
+    void release(T* obj, bool from_heap = false) noexcept {
+        destroy(obj, from_heap);
     }
 
     /**
@@ -219,15 +224,23 @@ public:
     }
 
     /**
-     * 풀 소진 횟수 (create()가 nullptr 반환한 횟수)
+     * 힙 fallback 횟수 (풀 소진으로 힙 할당된 횟수)
+     * 이 값이 높으면 풀 크기 증가 고려
+     */
+    [[nodiscard]] size_t heap_fallback_count() const noexcept {
+        return heap_fallback_count_.load(std::memory_order_relaxed);
+    }
+
+    /**
+     * @deprecated Use heap_fallback_count() instead
      */
     [[nodiscard]] size_t exhausted_count() const noexcept {
-        return exhausted_count_.load(std::memory_order_relaxed);
+        return heap_fallback_count();
     }
 
 private:
     FixedMemoryPool<sizeof(T), PoolSize> pool_;
-    std::atomic<size_t> exhausted_count_{0};
+    std::atomic<size_t> heap_fallback_count_{0};
 };
 
 
