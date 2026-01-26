@@ -68,39 +68,39 @@ Result<HttpResponse> UpbitOrderClient::make_request(
     return http_->request(req);
 }
 
-std::string UpbitOrderClient::format_symbol(const std::string& symbol) const {
-    // XRP ->KRW-XRP
-    if (symbol == "XRP") {
+std::string UpbitOrderClient::format_symbol(const char* symbol) const {
+    // XRP -> KRW-XRP
+    if (std::strcmp(symbol, "XRP") == 0) {
         return "KRW-XRP";
     }
-    return symbol;
+    return std::string(symbol);
 }
 
 Result<OrderResult> UpbitOrderClient::place_order(const OrderRequest& req) {
     // Rate limit 체크
     acquire_rate_limit();
-    
+
     // 파라미터 구성
     std::ostringstream params;
     params << "market=" << format_symbol(req.symbol);
     params << "&side=" << (req.side == OrderSide::Buy ? "bid" : "ask");
     params << "&ord_type=" << (req.type == OrderType::Limit ? "limit" : "market");
-    
+
     if (req.type == OrderType::Limit) {
-        if (req.price.has_value()) {
-            params << "&price=" << req.price.value();
+        if (req.price > 0.0) {
+            params << "&price=" << req.price;
         }
         params << "&volume=" << req.quantity;
     } else {
         // Market 주문은 KRW 금액 또는 수량
-        if (req.side == OrderSide::Buy && req.price.has_value()) {
-            params << "&price=" << (req.price.value() * req.quantity);  // KRW 금액
+        if (req.side == OrderSide::Buy && req.price > 0.0) {
+            params << "&price=" << (req.price * req.quantity);  // KRW 금액
         } else {
             params << "&volume=" << req.quantity;
         }
     }
-    
-    if (!req.client_order_id.empty()) {
+
+    if (req.client_order_id[0] != '\0') {
         params << "&identifier=" << req.client_order_id;
     }
     
@@ -120,11 +120,11 @@ Result<OrderResult> UpbitOrderClient::place_order(const OrderRequest& req) {
     // 응답 파싱
     try {
         auto json = nlohmann::json::parse(resp.value().body);
-        
+
         OrderResult result;
-        result.order_id = json["uuid"];
+        result.set_order_id(json["uuid"].get<std::string>().c_str());
         result.status = OrderStatus::Pending;  // Upbit은 대기 상태로 시작
-        
+
         return Ok(std::move(result));
         
     } catch (const std::exception& e) {

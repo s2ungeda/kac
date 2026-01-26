@@ -95,6 +95,105 @@ Claude Code는 반드시 이 파일을 유지/업데이트해야 함:
 
 ---
 
+## 🚀 저지연(Low-Latency) 설계 원칙
+
+> ⚠️ **모든 새 코드는 이 원칙을 준수해야 함**
+
+### 1. Zero-Copy (복사 금지)
+```cpp
+// ❌ 금지 - 값 복사
+void process(Ticker ticker) { ... }
+queue.push(ticker);  // 복사 발생
+
+// ✅ 권장 - 포인터 전달
+void process(Ticker* ticker) { ... }
+queue.push(ticker);  // 포인터만 전달
+
+// Zero-Copy Queue 사용
+ZeroCopyQueue<Ticker> queue(1024);
+Ticker* t = ticker_pool().create();
+queue.push(t);  // 포인터만 저장
+```
+
+### 2. Lock-Free 통신
+```cpp
+// ❌ 금지 - std::mutex
+std::mutex mtx;
+{
+    std::lock_guard<std::mutex> lock(mtx);
+    data = value;  // 락 오버헤드: 50~500ns
+}
+
+// ✅ 권장 - SPSC Queue
+SPSCQueue<Ticker*> queue(1024);
+queue.push(ticker);  // Lock-free: 5~20ns
+```
+
+### 3. Cache-Line Awareness
+```cpp
+// ❌ 금지 - 정렬 없음
+struct Ticker {
+    double price;
+    double bid;
+    // ... false sharing 위험
+};
+
+// ✅ 필수 - alignas(64)
+struct alignas(64) Ticker {
+    double price;
+    double bid;
+    // ... 캐시 라인 정렬
+};
+static_assert(sizeof(Ticker) == 64, "Must be cache-line sized");
+```
+
+### 4. Deterministic Performance (런타임 할당 금지)
+```cpp
+// ❌ 금지 - 런타임 new/malloc
+Ticker* t = new Ticker();  // 100~1000ns
+
+// ✅ 권장 - Memory Pool
+Ticker* t = ticker_pool().create();  // 10ns
+if (!t) {
+    // 풀 소진 처리 - fallback 없음!
+    logger->error("Ticker pool exhausted!");
+    return nullptr;
+}
+```
+
+### 5. 고정 크기 데이터 구조
+```cpp
+// ❌ 금지 - 동적 크기
+struct Ticker {
+    std::string symbol;  // 힙 할당
+    std::vector<double> data;  // 힙 할당
+};
+
+// ✅ 권장 - 고정 크기
+struct Ticker {
+    char symbol[16];  // 스택/풀 할당
+    double data[10];  // 고정 크기
+};
+```
+
+### 6. SIMD 가속 (호가 연산)
+```cpp
+// Phase 4 (TASK_10)에서 구현 예정
+// AVX-512를 이용한 호가창 병렬 연산
+```
+
+### 핵심 원칙 요약
+
+| 원칙 | 금지 | 권장 |
+|------|------|------|
+| Zero-Copy | 값 복사 | 포인터 전달 |
+| Lock-Free | std::mutex | SPSC/MPSC Queue |
+| Cache-Line | 비정렬 구조체 | alignas(64) |
+| Deterministic | new/malloc | Memory Pool |
+| 고정 크기 | std::string, std::vector | char[], 고정 배열 |
+
+---
+
 ## ⚠️ 코드 품질 규칙
 
 ### ❌ 절대 금지 (위반 시 태스크 실패 처리)

@@ -115,17 +115,15 @@ void BinanceWebSocket::parse_message(const std::string& message) {
 void BinanceWebSocket::parse_ticker(const nlohmann::json& data) {
     Ticker ticker;
     ticker.exchange = Exchange::Binance;
-    ticker.symbol = data["s"];  // Symbol
+    ticker.set_symbol(data["s"].get<std::string>());  // Symbol
     ticker.price = std::stod(data["c"].get<std::string>());  // Last price
     ticker.bid = std::stod(data["b"].get<std::string>());    // Best bid
     ticker.ask = std::stod(data["a"].get<std::string>());    // Best ask
     ticker.volume_24h = std::stod(data["v"].get<std::string>());  // Volume
-    
-    // Binance는 타임스탬프를 밀리초로 제공
+
+    // Binance는 타임스탬프를 밀리초로 제공 (마이크로초로 변환)
     int64_t timestamp_ms = data["E"];  // Event time
-    ticker.timestamp = std::chrono::system_clock::time_point(
-        std::chrono::milliseconds(timestamp_ms)
-    );
+    ticker.timestamp_us = timestamp_ms * 1000;
     
     logger_->info("[Binance] Ticker - Symbol: {}, Price: {} USDT",
                   ticker.symbol, ticker.price);
@@ -138,42 +136,41 @@ void BinanceWebSocket::parse_ticker(const nlohmann::json& data) {
 void BinanceWebSocket::parse_orderbook(const nlohmann::json& data, const std::string& stream_symbol) {
     OrderBook orderbook;
     orderbook.exchange = Exchange::Binance;
-    
+    orderbook.clear();
+
     // 심볼 추출 (depthUpdate 이벤트에는 's' 필드가 없을 수 있음)
     if (data.contains("s")) {
-        orderbook.symbol = data["s"];
+        orderbook.set_symbol(data["s"].get<std::string>());
     } else if (!stream_symbol.empty()) {
-        orderbook.symbol = stream_symbol;
+        orderbook.set_symbol(stream_symbol);
     }
-    
+
     // Bids (매수 호가)
     if (data.contains("bids")) {
         for (const auto& bid : data["bids"]) {
-            PriceLevel level;
-            level.price = std::stod(bid[0].get<std::string>());
-            level.quantity = std::stod(bid[1].get<std::string>());
-            orderbook.bids.push_back(level);
+            double price = std::stod(bid[0].get<std::string>());
+            double quantity = std::stod(bid[1].get<std::string>());
+            orderbook.add_bid(price, quantity);
         }
     }
-    
+
     // Asks (매도 호가)
     if (data.contains("asks")) {
         for (const auto& ask : data["asks"]) {
-            PriceLevel level;
-            level.price = std::stod(ask[0].get<std::string>());
-            level.quantity = std::stod(ask[1].get<std::string>());
-            orderbook.asks.push_back(level);
+            double price = std::stod(ask[0].get<std::string>());
+            double quantity = std::stod(ask[1].get<std::string>());
+            orderbook.add_ask(price, quantity);
         }
     }
-    
-    // 타임스탬프
+
+    // 타임스탬프 (마이크로초로 변환)
     if (data.contains("E")) {
         int64_t timestamp_ms = data["E"];
-        orderbook.timestamp = std::chrono::system_clock::time_point(
-            std::chrono::milliseconds(timestamp_ms)
-        );
+        orderbook.timestamp_us = timestamp_ms * 1000;
     } else {
-        orderbook.timestamp = std::chrono::system_clock::now();
+        auto now = std::chrono::system_clock::now();
+        orderbook.timestamp_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            now.time_since_epoch()).count();
     }
     
     WebSocketEvent evt(WebSocketEvent::Type::OrderBook, Exchange::Binance, orderbook);
@@ -184,26 +181,23 @@ void BinanceWebSocket::parse_orderbook(const nlohmann::json& data, const std::st
 void BinanceWebSocket::parse_trade(const nlohmann::json& data) {
     Ticker trade;
     trade.exchange = Exchange::Binance;
-    
+
     // 심볼 (대문자 변환)
-    std::string symbol = data["s"];
-    trade.symbol = symbol;
-    
+    trade.set_symbol(data["s"].get<std::string>());
+
     // 체결가
     trade.price = std::stod(data["p"].get<std::string>());
-    
+
     // Binance trade에는 bid/ask 정보가 없으므로 체결가로 설정
     trade.bid = trade.price;
     trade.ask = trade.price;
-    
+
     // 체결량
     trade.volume_24h = std::stod(data["q"].get<std::string>());
-    
-    // 타임스탬프
+
+    // 타임스탬프 (마이크로초로 변환)
     int64_t timestamp_ms = data["T"];
-    trade.timestamp = std::chrono::system_clock::time_point(
-        std::chrono::milliseconds(timestamp_ms)
-    );
+    trade.timestamp_us = timestamp_ms * 1000;
     
     logger_->info("[Binance] Trade - Symbol: {}, Price: {} USDT",
                   trade.symbol, trade.price);

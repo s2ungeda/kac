@@ -45,19 +45,19 @@ int main() {
     std::cout << "\n=== Order Example (DRY RUN) ===\n";
     
     OrderRequest req;
-    req.symbol = "XRP";
+    req.set_symbol("XRP");
     req.side = OrderSide::Buy;
     req.type = OrderType::Limit;
     req.quantity = 10;  // 10 XRP
     req.price = 850;    // 850 KRW
-    req.client_order_id = "test_order_001";
-    
+    req.set_client_order_id("test_order_001");
+
     std::cout << "Order Request:\n";
     std::cout << "  Symbol: " << req.symbol << "\n";
     std::cout << "  Side: " << (req.side == OrderSide::Buy ? "Buy" : "Sell") << "\n";
     std::cout << "  Type: " << (req.type == OrderType::Limit ? "Limit" : "Market") << "\n";
     std::cout << "  Quantity: " << req.quantity << "\n";
-    std::cout << "  Price: " << (req.price.has_value() ? std::to_string(req.price.value()) : "N/A") << "\n";
+    std::cout << "  Price: " << (req.price > 0 ? std::to_string(req.price) : "N/A") << "\n";
     
     // 실제로 주문하려면 아래 주석 해제 (주의!)
     // auto result = upbit_client->place_order(req);

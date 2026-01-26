@@ -31,7 +31,7 @@ private:
     );
     
     // 심볼 변환 (XRP -> XRPUSDT)
-    std::string format_symbol(const std::string& symbol) const;
+    std::string format_symbol(const char* symbol) const;
     
     std::string api_key_;
     std::string secret_key_;

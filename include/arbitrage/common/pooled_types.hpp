@@ -169,13 +169,13 @@ using PooledBalance = PooledPtr<Balance, BALANCE_POOL_SIZE>;
  */
 struct PoolStats {
     size_t ticker_available;
-    size_t ticker_fallback;
+    size_t ticker_exhausted;      // 풀 소진 횟수
     size_t orderbook_available;
-    size_t orderbook_fallback;
+    size_t orderbook_exhausted;
     size_t order_available;
-    size_t order_fallback;
+    size_t order_exhausted;
     size_t balance_available;
-    size_t balance_fallback;
+    size_t balance_exhausted;
 };
 
 /**
@@ -184,13 +184,13 @@ struct PoolStats {
 inline PoolStats get_pool_stats() {
     return PoolStats{
         .ticker_available = ticker_pool().available(),
-        .ticker_fallback = ticker_pool().fallback_count(),
+        .ticker_exhausted = ticker_pool().exhausted_count(),
         .orderbook_available = orderbook_pool().available(),
-        .orderbook_fallback = orderbook_pool().fallback_count(),
+        .orderbook_exhausted = orderbook_pool().exhausted_count(),
         .order_available = order_request_pool().available(),
-        .order_fallback = order_request_pool().fallback_count(),
+        .order_exhausted = order_request_pool().exhausted_count(),
         .balance_available = balance_pool().available(),
-        .balance_fallback = balance_pool().fallback_count()
+        .balance_exhausted = balance_pool().exhausted_count()
     };
 }
 

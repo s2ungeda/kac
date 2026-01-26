@@ -91,7 +91,7 @@ inline Result<Ticker> parse_upbit_ticker(std::string_view input) noexcept {
         // code에서 심볼 추출 (KRW-XRP -> XRP)
         std::string code = doc.value("code", "");
         auto pos = code.find('-');
-        ticker.symbol = (pos != std::string::npos) ? code.substr(pos + 1) : code;
+        ticker.set_symbol((pos != std::string::npos) ? code.substr(pos + 1) : code);
 
         ticker.price = doc.value("trade_price", 0.0);
         ticker.volume_24h = doc.value("acc_trade_volume_24h", 0.0);
@@ -100,11 +100,10 @@ inline Result<Ticker> parse_upbit_ticker(std::string_view input) noexcept {
         ticker.bid = doc.value("best_bid_price", 0.0);
         ticker.ask = doc.value("best_ask_price", 0.0);
 
-        // timestamp
+        // timestamp (마이크로초로 변환)
         if (doc.contains("timestamp")) {
             auto ts_ms = doc["timestamp"].get<int64_t>();
-            ticker.timestamp = std::chrono::system_clock::time_point(
-                std::chrono::milliseconds(ts_ms));
+            ticker.timestamp_us = ts_ms * 1000;
         }
 
         return Ok(std::move(ticker));
@@ -154,7 +153,7 @@ inline Result<Ticker> parse_binance_ticker(std::string_view input) noexcept {
         Ticker ticker;
         ticker.exchange = Exchange::Binance;
 
-        ticker.symbol = doc.value("s", "");
+        ticker.set_symbol(doc.value("s", ""));
 
         // 가격은 문자열로 오는 경우가 많음
         if (doc.contains("c")) {
@@ -178,7 +177,7 @@ inline Result<Ticker> parse_binance_ticker(std::string_view input) noexcept {
             ticker.ask = a.is_string() ? std::stod(a.get<std::string>()) : a.get<double>();
         }
 
-        ticker.timestamp = std::chrono::system_clock::now();
+        ticker.set_timestamp_now();
 
         return Ok(std::move(ticker));
     } catch (const std::exception& e) {
@@ -210,7 +209,7 @@ inline Result<Ticker> parse_binance_agg_trade(std::string_view input) noexcept {
         Ticker ticker;
         ticker.exchange = Exchange::Binance;
 
-        ticker.symbol = doc.value("s", "");
+        ticker.set_symbol(doc.value("s", ""));
 
         // 가격
         if (doc.contains("p")) {
@@ -218,13 +217,12 @@ inline Result<Ticker> parse_binance_agg_trade(std::string_view input) noexcept {
             ticker.price = p.is_string() ? std::stod(p.get<std::string>()) : p.get<double>();
         }
 
-        // timestamp
+        // timestamp (마이크로초로 변환)
         if (doc.contains("T")) {
             auto ts_ms = doc["T"].get<int64_t>();
-            ticker.timestamp = std::chrono::system_clock::time_point(
-                std::chrono::milliseconds(ts_ms));
+            ticker.timestamp_us = ts_ms * 1000;
         } else {
-            ticker.timestamp = std::chrono::system_clock::now();
+            ticker.set_timestamp_now();
         }
 
         return Ok(std::move(ticker));
@@ -264,7 +262,7 @@ inline Result<Ticker> parse_bithumb_ticker(std::string_view input) noexcept {
         // symbol (XRP_KRW -> XRP)
         std::string symbol = content.value("symbol", "");
         auto pos = symbol.find('_');
-        ticker.symbol = (pos != std::string::npos) ? symbol.substr(0, pos) : symbol;
+        ticker.set_symbol((pos != std::string::npos) ? symbol.substr(0, pos) : symbol);
 
         // 가격
         if (content.contains("closePrice")) {
@@ -278,7 +276,7 @@ inline Result<Ticker> parse_bithumb_ticker(std::string_view input) noexcept {
             ticker.volume_24h = v.is_string() ? std::stod(v.get<std::string>()) : v.get<double>();
         }
 
-        ticker.timestamp = std::chrono::system_clock::now();
+        ticker.set_timestamp_now();
 
         return Ok(std::move(ticker));
     } catch (const std::exception& e) {
@@ -319,7 +317,7 @@ inline Result<Ticker> parse_bithumb_trade(std::string_view input) noexcept {
 
                 std::string symbol = item.value("symbol", "");
                 auto pos = symbol.find('_');
-                ticker.symbol = (pos != std::string::npos) ? symbol.substr(0, pos) : symbol;
+                ticker.set_symbol((pos != std::string::npos) ? symbol.substr(0, pos) : symbol);
 
                 if (item.contains("contPrice")) {
                     auto& p = item["contPrice"];
@@ -328,7 +326,7 @@ inline Result<Ticker> parse_bithumb_trade(std::string_view input) noexcept {
             }
         }
 
-        ticker.timestamp = std::chrono::system_clock::now();
+        ticker.set_timestamp_now();
 
         return Ok(std::move(ticker));
     } catch (const std::exception& e) {
@@ -360,7 +358,7 @@ inline Result<Ticker> parse_mexc_ticker(std::string_view input) noexcept {
         Ticker ticker;
         ticker.exchange = Exchange::MEXC;
 
-        ticker.symbol = doc.value("symbol", "");
+        ticker.set_symbol(doc.value("symbol", ""));
 
         // data 객체 안에 있을 수도 있음
         const auto& data = doc.contains("data") ? doc["data"] : doc;
@@ -376,7 +374,7 @@ inline Result<Ticker> parse_mexc_ticker(std::string_view input) noexcept {
             ticker.volume_24h = data["volume24"].get<double>();
         }
 
-        ticker.timestamp = std::chrono::system_clock::now();
+        ticker.set_timestamp_now();
 
         return Ok(std::move(ticker));
     } catch (const std::exception& e) {
@@ -409,7 +407,7 @@ inline Result<Ticker> parse_mexc_deal(std::string_view input) noexcept {
         Ticker ticker;
         ticker.exchange = Exchange::MEXC;
 
-        ticker.symbol = doc.value("symbol", "");
+        ticker.set_symbol(doc.value("symbol", ""));
 
         // data.deals[0] 또는 직접 deals
         const auto& data = doc.contains("data") ? doc["data"] : doc;
@@ -426,13 +424,12 @@ inline Result<Ticker> parse_mexc_deal(std::string_view input) noexcept {
                 auto ts = deal["t"].get<int64_t>();
                 // MEXC는 초 단위일 수 있음
                 if (ts < 10000000000LL) ts *= 1000;  // 초 -> 밀리초
-                ticker.timestamp = std::chrono::system_clock::time_point(
-                    std::chrono::milliseconds(ts));
+                ticker.timestamp_us = ts * 1000;  // 밀리초 -> 마이크로초
             }
         }
 
-        if (ticker.timestamp == TimePoint{}) {
-            ticker.timestamp = std::chrono::system_clock::now();
+        if (ticker.timestamp_us == 0) {
+            ticker.set_timestamp_now();
         }
 
         return Ok(std::move(ticker));

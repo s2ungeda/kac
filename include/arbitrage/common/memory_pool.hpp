@@ -122,17 +122,22 @@ private:
 
 
 /**
- * 타입 안전 객체 풀
+ * 타입 안전 객체 풀 (Deterministic, No Fallback)
  *
  * 특징:
  * - 특정 타입 T에 최적화
  * - Lock-Free 생성/소멸
- * - 풀 소진 시 자동 힙 Fallback
+ * - 런타임 할당 없음: 풀 소진 시 nullptr 반환 (fallback 제거)
+ * - Deterministic Performance: 모든 할당이 O(1)
  *
  * 사용 예:
  *   ObjectPool<Ticker, 4096> pool;
- *   Ticker* t = pool.create(Exchange::Upbit, "BTC", 50000.0);
- *   pool.destroy(t);
+ *   Ticker* t = pool.create();  // nullptr일 수 있음!
+ *   if (t) {
+ *       t->price = 50000.0;
+ *       // ... 사용 후 반환
+ *       pool.destroy(t);
+ *   }
  *
  * @tparam T 객체 타입
  * @tparam PoolSize 풀 크기 (기본 1024)
@@ -148,33 +153,54 @@ public:
     ObjectPool& operator=(const ObjectPool&) = delete;
 
     /**
-     * 객체 생성
+     * 객체 생성 (Deterministic)
      * @param args 생성자 인자
-     * @return 생성된 객체 포인터
+     * @return 생성된 객체 포인터, 풀 소진 시 nullptr
+     *
+     * 주의: nullptr 반환 시 적절한 처리 필요!
      */
     template <typename... Args>
-    T* create(Args&&... args) {
+    T* create(Args&&... args) noexcept {
         void* mem = pool_.allocate();
         if (!mem) {
-            // Fallback: 풀 소진 시 힙 할당
-            mem = ::operator new(sizeof(T));
-            ++fallback_count_;
+            ++exhausted_count_;
+            return nullptr;  // 런타임 할당 없음!
         }
         return new (mem) T(std::forward<Args>(args)...);
     }
 
     /**
-     * 객체 소멸
+     * 객체 생성 (기본 생성자)
+     * @return 생성된 객체 포인터, 풀 소진 시 nullptr
+     */
+    T* acquire() noexcept {
+        void* mem = pool_.allocate();
+        if (!mem) {
+            ++exhausted_count_;
+            return nullptr;
+        }
+        return new (mem) T();
+    }
+
+    /**
+     * 객체 소멸 및 풀에 반환
      * @param obj 소멸할 객체 포인터
      */
-    void destroy(T* obj) {
+    void destroy(T* obj) noexcept {
         if (!obj) return;
 
         // 소멸자 호출
         obj->~T();
 
-        // 메모리 반환 (풀 범위 내인지 확인)
+        // 메모리 반환
         pool_.deallocate(obj);
+    }
+
+    /**
+     * release의 별칭 (destroy와 동일)
+     */
+    void release(T* obj) noexcept {
+        destroy(obj);
     }
 
     /**
@@ -192,15 +218,15 @@ public:
     }
 
     /**
-     * Fallback 횟수 (풀 소진으로 힙 사용한 횟수)
+     * 풀 소진 횟수 (create()가 nullptr 반환한 횟수)
      */
-    [[nodiscard]] size_t fallback_count() const noexcept {
-        return fallback_count_.load(std::memory_order_relaxed);
+    [[nodiscard]] size_t exhausted_count() const noexcept {
+        return exhausted_count_.load(std::memory_order_relaxed);
     }
 
 private:
     FixedMemoryPool<sizeof(T), PoolSize> pool_;
-    std::atomic<size_t> fallback_count_{0};
+    std::atomic<size_t> exhausted_count_{0};
 };
 
 

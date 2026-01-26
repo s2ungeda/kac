@@ -161,7 +161,7 @@ void MEXCWebSocket::parse_ticker(const nlohmann::json& json) {
 
         // 심볼
         if (data.contains("symbol")) {
-            ticker.symbol = data["symbol"];
+            ticker.set_symbol(data["symbol"].get<std::string>());
         }
 
         // 최종 체결가
@@ -186,14 +186,12 @@ void MEXCWebSocket::parse_ticker(const nlohmann::json& json) {
             ticker.volume_24h = data["volume24"].get<double>();
         }
 
-        // 타임스탬프
+        // 타임스탬프 (마이크로초로 변환)
         if (data.contains("timestamp")) {
             int64_t ts = data["timestamp"].get<int64_t>();
-            ticker.timestamp = std::chrono::system_clock::time_point(
-                std::chrono::milliseconds(ts)
-            );
+            ticker.timestamp_us = ts * 1000;
         } else {
-            ticker.timestamp = std::chrono::system_clock::now();
+            ticker.set_timestamp_now();
         }
 
         logger_->info("[MEXC] Ticker - Symbol: {}, Price: {}, Bid: {}, Ask: {}",
@@ -234,9 +232,9 @@ void MEXCWebSocket::process_single_deal(const nlohmann::json& deal, const std::s
 
     // 심볼
     if (deal.contains("symbol")) {
-        trade.symbol = deal["symbol"];
+        trade.set_symbol(deal["symbol"].get<std::string>());
     } else {
-        trade.symbol = default_symbol;
+        trade.set_symbol(default_symbol);
     }
 
     // 체결가
@@ -256,19 +254,15 @@ void MEXCWebSocket::process_single_deal(const nlohmann::json& deal, const std::s
         trade.volume_24h = deal["vol"].get<double>();
     }
 
-    // 타임스탬프
+    // 타임스탬프 (마이크로초로 변환)
     if (deal.contains("t")) {
         int64_t ts = deal["t"].get<int64_t>();
-        trade.timestamp = std::chrono::system_clock::time_point(
-            std::chrono::milliseconds(ts)
-        );
+        trade.timestamp_us = ts * 1000;
     } else if (deal.contains("ts")) {
         int64_t ts = deal["ts"].get<int64_t>();
-        trade.timestamp = std::chrono::system_clock::time_point(
-            std::chrono::milliseconds(ts)
-        );
+        trade.timestamp_us = ts * 1000;
     } else {
-        trade.timestamp = std::chrono::system_clock::now();
+        trade.set_timestamp_now();
     }
 
     logger_->info("[MEXC] Deal - Symbol: {}, Price: {}, Vol: {}",
@@ -292,35 +286,32 @@ void MEXCWebSocket::parse_depth(const nlohmann::json& json) {
 
         OrderBook orderbook;
         orderbook.exchange = Exchange::MEXC;
+        orderbook.clear();
 
         // 심볼
         if (json.contains("symbol")) {
-            orderbook.symbol = json["symbol"];
+            orderbook.set_symbol(json["symbol"].get<std::string>());
         }
 
         // Asks (매도 호가)
         if (data.contains("asks")) {
             for (const auto& ask : data["asks"]) {
-                PriceLevel level;
-                level.price = ask[0].get<double>();
-                level.quantity = ask[1].get<double>();
-                orderbook.asks.push_back(level);
+                orderbook.add_ask(ask[0].get<double>(), ask[1].get<double>());
             }
         }
 
         // Bids (매수 호가)
         if (data.contains("bids")) {
             for (const auto& bid : data["bids"]) {
-                PriceLevel level;
-                level.price = bid[0].get<double>();
-                level.quantity = bid[1].get<double>();
-                orderbook.bids.push_back(level);
+                orderbook.add_bid(bid[0].get<double>(), bid[1].get<double>());
             }
         }
 
-        orderbook.timestamp = std::chrono::system_clock::now();
+        auto now = std::chrono::system_clock::now();
+        orderbook.timestamp_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            now.time_since_epoch()).count();
 
-        if (!orderbook.bids.empty() && !orderbook.asks.empty()) {
+        if (orderbook.bid_count > 0 && orderbook.ask_count > 0) {
             logger_->debug("[MEXC] Depth - Best Bid: {}, Best Ask: {}",
                           orderbook.bids[0].price, orderbook.asks[0].price);
         }

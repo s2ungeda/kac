@@ -125,7 +125,7 @@ void BithumbWebSocket::parse_trade_v2(const nlohmann::json& json) {
 
     // code: "KRW-XRP" -> symbol 저장
     if (json.contains("code")) {
-        trade.symbol = json["code"].get<std::string>();
+        trade.set_symbol(json["code"].get<std::string>());
     }
 
     // trade_price: 체결가
@@ -140,14 +140,14 @@ void BithumbWebSocket::parse_trade_v2(const nlohmann::json& json) {
         trade.volume_24h = json["trade_volume"].get<double>();
     }
 
-    // trade_timestamp: 타임스탬프 (밀리초)
+    // trade_timestamp: 타임스탬프 (밀리초 -> 마이크로초)
     if (json.contains("trade_timestamp")) {
         int64_t ts = json["trade_timestamp"].get<int64_t>();
-        trade.timestamp = std::chrono::system_clock::time_point(
-            std::chrono::milliseconds(ts)
-        );
+        trade.timestamp_us = ts * 1000;
     } else {
-        trade.timestamp = std::chrono::system_clock::now();
+        auto now = std::chrono::system_clock::now();
+        trade.timestamp_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            now.time_since_epoch()).count();
     }
 
     // stream_type 확인 (REALTIME만 처리)
@@ -176,7 +176,7 @@ void BithumbWebSocket::parse_ticker_v2(const nlohmann::json& json) {
     ticker.exchange = Exchange::Bithumb;
 
     if (json.contains("code")) {
-        ticker.symbol = json["code"].get<std::string>();
+        ticker.set_symbol(json["code"].get<std::string>());
     }
 
     // trade_price: 현재가
@@ -201,7 +201,7 @@ void BithumbWebSocket::parse_ticker_v2(const nlohmann::json& json) {
         ticker.volume_24h = json["acc_trade_volume_24h"].get<double>();
     }
 
-    ticker.timestamp = std::chrono::system_clock::now();
+    ticker.set_timestamp_now();
 
     logger_->info("[Bithumb] Ticker - Code: {}, Price: {} KRW",
                   ticker.symbol, ticker.price);
@@ -213,9 +213,10 @@ void BithumbWebSocket::parse_ticker_v2(const nlohmann::json& json) {
 void BithumbWebSocket::parse_orderbook_v2(const nlohmann::json& json) {
     OrderBook orderbook;
     orderbook.exchange = Exchange::Bithumb;
+    orderbook.clear();
 
     if (json.contains("code")) {
-        orderbook.symbol = json["code"].get<std::string>();
+        orderbook.set_symbol(json["code"].get<std::string>());
     }
 
     // orderbook_units: [{ask_price, bid_price, ask_size, bid_size}, ...]
@@ -223,24 +224,26 @@ void BithumbWebSocket::parse_orderbook_v2(const nlohmann::json& json) {
         for (const auto& unit : json["orderbook_units"]) {
             // Ask
             if (unit.contains("ask_price") && unit.contains("ask_size")) {
-                PriceLevel ask;
-                ask.price = unit["ask_price"].get<double>();
-                ask.quantity = unit["ask_size"].get<double>();
-                orderbook.asks.push_back(ask);
+                orderbook.add_ask(
+                    unit["ask_price"].get<double>(),
+                    unit["ask_size"].get<double>()
+                );
             }
             // Bid
             if (unit.contains("bid_price") && unit.contains("bid_size")) {
-                PriceLevel bid;
-                bid.price = unit["bid_price"].get<double>();
-                bid.quantity = unit["bid_size"].get<double>();
-                orderbook.bids.push_back(bid);
+                orderbook.add_bid(
+                    unit["bid_price"].get<double>(),
+                    unit["bid_size"].get<double>()
+                );
             }
         }
     }
 
-    orderbook.timestamp = std::chrono::system_clock::now();
+    auto now = std::chrono::system_clock::now();
+    orderbook.timestamp_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        now.time_since_epoch()).count();
 
-    if (!orderbook.bids.empty() && !orderbook.asks.empty()) {
+    if (orderbook.bid_count > 0 && orderbook.ask_count > 0) {
         logger_->debug("[Bithumb] OrderBook - Best Bid: {}, Best Ask: {}",
                       orderbook.bids[0].price, orderbook.asks[0].price);
     }

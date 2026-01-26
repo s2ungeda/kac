@@ -32,7 +32,7 @@ private:
     );
     
     // 심볼 변환 (XRP -> KRW-XRP)
-    std::string format_symbol(const std::string& symbol) const;
+    std::string format_symbol(const char* symbol) const;
     
     std::string access_key_;
     std::string secret_key_;

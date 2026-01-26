@@ -2,6 +2,7 @@
 #include "arbitrage/common/crypto.hpp"
 #include "arbitrage/common/json.hpp"
 #include <sstream>
+#include <cstring>
 
 namespace arbitrage {
 
@@ -55,12 +56,12 @@ Result<HttpResponse> BinanceOrderClient::make_request(
     return http_->request(req);
 }
 
-std::string BinanceOrderClient::format_symbol(const std::string& symbol) const {
+std::string BinanceOrderClient::format_symbol(const char* symbol) const {
     // XRP -> XRPUSDT
-    if (symbol == "XRP") {
+    if (std::strcmp(symbol, "XRP") == 0) {
         return "XRPUSDT";
     }
-    return symbol;
+    return std::string(symbol);
 }
 
 Result<OrderResult> BinanceOrderClient::place_order(const OrderRequest& req) {
@@ -75,13 +76,13 @@ Result<OrderResult> BinanceOrderClient::place_order(const OrderRequest& req) {
     params << "&quantity=" << req.quantity;
     
     if (req.type == OrderType::Limit) {
-        if (req.price.has_value()) {
-            params << "&price=" << req.price.value();
+        if (req.price > 0.0) {
+            params << "&price=" << req.price;
         }
         params << "&timeInForce=GTC";  // Good Till Cancel
     }
-    
-    if (!req.client_order_id.empty()) {
+
+    if (req.client_order_id[0] != '\0') {
         params << "&newClientOrderId=" << req.client_order_id;
     }
     
@@ -103,7 +104,7 @@ Result<OrderResult> BinanceOrderClient::place_order(const OrderRequest& req) {
         auto json = nlohmann::json::parse(resp.value().body);
         
         OrderResult result;
-        result.order_id = std::to_string(json["orderId"].get<long>());
+        result.set_order_id(std::to_string(json["orderId"].get<long>()).c_str());
         
         std::string status = json["status"];
         if (status == "NEW") {

@@ -113,17 +113,15 @@ void UpbitWebSocket::parse_message(const std::string& message) {
 void UpbitWebSocket::parse_ticker(const nlohmann::json& data) {
     Ticker ticker;
     ticker.exchange = Exchange::Upbit;
-    ticker.symbol = data["code"];
+    ticker.set_symbol(data["code"].get<std::string>());
     ticker.price = data["trade_price"];
     ticker.bid = data.value("bid_price", 0.0);
     ticker.ask = data.value("ask_price", 0.0);
     ticker.volume_24h = data["acc_trade_volume_24h"];
-    
-    // Upbit는 타임스탬프를 밀리초로 제공
+
+    // Upbit는 타임스탬프를 밀리초로 제공 (마이크로초로 변환)
     int64_t timestamp_ms = data["timestamp"];
-    ticker.timestamp = std::chrono::system_clock::time_point(
-        std::chrono::milliseconds(timestamp_ms)
-    );
+    ticker.timestamp_us = timestamp_ms * 1000;
     
     logger_->info("[Upbit] Ticker - Symbol: {}, Price: {} KRW",
                   ticker.symbol, static_cast<int>(ticker.price));
@@ -136,27 +134,22 @@ void UpbitWebSocket::parse_ticker(const nlohmann::json& data) {
 void UpbitWebSocket::parse_orderbook(const nlohmann::json& data) {
     OrderBook orderbook;
     orderbook.exchange = Exchange::Upbit;
-    orderbook.symbol = data["code"];
-    
+    orderbook.set_symbol(data["code"].get<std::string>());
+    orderbook.clear();
+
     // 호가 데이터 파싱
     auto orderbook_units = data["orderbook_units"];
-    
+
     for (const auto& unit : orderbook_units) {
         // 매도 호가
-        PriceLevel ask;
-        ask.price = unit["ask_price"];
-        ask.quantity = unit["ask_size"];
-        orderbook.asks.push_back(ask);
-        
+        orderbook.add_ask(unit["ask_price"], unit["ask_size"]);
+
         // 매수 호가
-        PriceLevel bid;
-        bid.price = unit["bid_price"];
-        bid.quantity = unit["bid_size"];
-        orderbook.bids.push_back(bid);
+        orderbook.add_bid(unit["bid_price"], unit["bid_size"]);
     }
-    
+
     // 상위 5개 호가 로그 (디버깅용)
-    if (orderbook.bids.size() >= 5) {
+    if (orderbook.bid_count >= 5) {
         logger_->debug("[Upbit] {} Top 5 Bids: [{:.0f}@{:.4f}, {:.0f}@{:.4f}, {:.0f}@{:.4f}, {:.0f}@{:.4f}, {:.0f}@{:.4f}]",
                       orderbook.symbol,
                       orderbook.bids[0].price, orderbook.bids[0].quantity,
@@ -172,15 +165,13 @@ void UpbitWebSocket::parse_orderbook(const nlohmann::json& data) {
                       orderbook.asks[3].price, orderbook.asks[3].quantity,
                       orderbook.asks[4].price, orderbook.asks[4].quantity);
     }
-    
-    // 타임스탬프
+
+    // 타임스탬프 (마이크로초로 변환)
     int64_t timestamp_ms = data["timestamp"];
-    orderbook.timestamp = std::chrono::system_clock::time_point(
-        std::chrono::milliseconds(timestamp_ms)
-    );
-    
+    orderbook.timestamp_us = timestamp_ms * 1000;
+
     logger_->debug("[Upbit] OrderBook - Symbol: {}, Bids: {}, Asks: {}, BestBid: {}, BestAsk: {}",
-                  orderbook.symbol, orderbook.bids.size(), orderbook.asks.size(),
+                  orderbook.symbol, orderbook.bid_count, orderbook.ask_count,
                   orderbook.best_bid(), orderbook.best_ask());
     
     WebSocketEvent evt(WebSocketEvent::Type::OrderBook, Exchange::Upbit, orderbook);
@@ -191,25 +182,23 @@ void UpbitWebSocket::parse_orderbook(const nlohmann::json& data) {
 void UpbitWebSocket::parse_trade(const nlohmann::json& data) {
     Ticker trade;
     trade.exchange = Exchange::Upbit;
-    
+
     // 심볼
-    trade.symbol = data["code"];
-    
+    trade.set_symbol(data["code"].get<std::string>());
+
     // 체결가
     trade.price = data["trade_price"];
-    
+
     // Upbit trade에는 bid/ask 정보가 없으므로 체결가로 설정
     trade.bid = trade.price;
     trade.ask = trade.price;
-    
+
     // 체결량
     trade.volume_24h = data["trade_volume"];
-    
-    // 타임스탬프
+
+    // 타임스탬프 (마이크로초로 변환)
     int64_t timestamp_ms = data["trade_timestamp"];
-    trade.timestamp = std::chrono::system_clock::time_point(
-        std::chrono::milliseconds(timestamp_ms)
-    );
+    trade.timestamp_us = timestamp_ms * 1000;
 
     logger_->info("[Upbit] Trade - Code: {}, Price: {} KRW, Vol: {}",
                   trade.symbol, trade.price, trade.volume_24h);

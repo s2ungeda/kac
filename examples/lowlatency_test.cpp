@@ -117,7 +117,7 @@ void test_memory_pool() {
     // 객체 생성
     auto* t1 = pool.create();
     t1->exchange = Exchange::Upbit;
-    t1->symbol = "BTC";
+    t1->set_symbol("BTC");
     t1->price = 50000000.0;
 
     std::cout << "Created ticker: " << exchange_name(t1->exchange)
