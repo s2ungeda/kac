@@ -143,3 +143,24 @@ target_link_libraries(rate_limiter_test
         common
         Threads::Threads
 )
+
+# Executor Test (TASK_08)
+add_executable(executor_test executor_test.cpp)
+
+target_link_libraries(executor_test
+    PRIVATE
+        common
+        executor
+        exchange_order
+        Threads::Threads
+)
+
+# CURL 링크
+if(CURL_FOUND)
+    target_link_libraries(executor_test PRIVATE ${CURL_LIBRARIES})
+endif()
+
+# OpenSSL 링크
+if(OpenSSL_FOUND)
+    target_link_libraries(executor_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+endif()

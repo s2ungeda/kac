@@ -29,6 +29,12 @@ add_library(strategy
     strategy/premium_calc.cpp
 )
 
+# Executor 라이브러리
+add_library(executor
+    executor/dual_order.cpp
+    executor/recovery.cpp
+)
+
 # 공통 라이브러리 링크
 target_link_libraries(common
     PUBLIC
@@ -95,6 +101,14 @@ target_link_libraries(strategy
         Threads::Threads
 )
 
+# Executor 라이브러리 링크
+target_link_libraries(executor
+    PUBLIC
+        common
+        exchange_order
+        Threads::Threads
+)
+
 # 메인 실행 파일
 add_executable(arbitrage
     main.cpp
@@ -104,6 +118,7 @@ target_link_libraries(arbitrage
     PRIVATE
         common
         strategy
+        executor
         exchange_websocket
         exchange_order
         Threads::Threads
