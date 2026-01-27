@@ -27,6 +27,9 @@ add_library(exchange_order
 # Strategy 라이브러리
 add_library(strategy
     strategy/premium_calc.cpp
+    strategy/liquidity_metrics.cpp
+    strategy/slippage_model.cpp
+    strategy/orderbook_analyzer.cpp
 )
 
 # Executor 라이브러리

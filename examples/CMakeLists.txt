@@ -185,3 +185,13 @@ endif()
 if(OpenSSL_FOUND)
     target_link_libraries(transfer_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 endif()
+
+# OrderBook Analyzer Test (TASK_10)
+add_executable(orderbook_analyzer_test orderbook_analyzer_test.cpp)
+
+target_link_libraries(orderbook_analyzer_test
+    PRIVATE
+        common
+        strategy
+        Threads::Threads
+)
