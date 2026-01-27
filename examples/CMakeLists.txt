@@ -164,3 +164,24 @@ endif()
 if(OpenSSL_FOUND)
     target_link_libraries(executor_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 endif()
+
+# Transfer Test (TASK_09)
+add_executable(transfer_test transfer_test.cpp)
+
+target_link_libraries(transfer_test
+    PRIVATE
+        common
+        executor
+        exchange_order
+        Threads::Threads
+)
+
+# CURL 링크
+if(CURL_FOUND)
+    target_link_libraries(transfer_test PRIVATE ${CURL_LIBRARIES})
+endif()
+
+# OpenSSL 링크
+if(OpenSSL_FOUND)
+    target_link_libraries(transfer_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+endif()

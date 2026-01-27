@@ -33,6 +33,7 @@ add_library(strategy
 add_library(executor
     executor/dual_order.cpp
     executor/recovery.cpp
+    executor/transfer.cpp
 )
 
 # 공통 라이브러리 링크
