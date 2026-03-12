@@ -31,6 +31,7 @@
 | 14 | Strategy Plugin | 2026-03-12 | ✅ 빌드 성공 | IStrategy, StrategyExecutor, BasicArbStrategy |
 | 15 | Config Hot-reload | 2026-03-12 | ✅ 빌드 성공 | ConfigWatcher, MultiConfigWatcher, mtime 기반 |
 | 16 | Secrets Manager | 2026-03-12 | ✅ 빌드 성공 | AES-256-GCM, PBKDF2, SecureString |
+| 17 | Multi Account | 2026-03-12 | ✅ 빌드 성공 | AccountManager, 가중치 기반 선택, 잔고 통합 |
 
 ---
 
@@ -38,7 +39,7 @@
 
 ### 현재: 없음
 
-다음 태스크: TASK_17 (Multi Account)
+다음 태스크: TASK_18 (Symbol Master)
 
 ---
 
@@ -208,7 +209,19 @@
   - EncryptedData 구조체: IV + Tag + Ciphertext 관리
   - 글로벌 인스턴스: init_secrets_manager(), secrets_manager()
   - error.hpp에 새 ErrorCode 추가: FileError, CryptoError, InvalidParameter, NotFound
-- Phase 5 (인프라) 33% 완료
+- TASK_17 Multi Account 완료
+  - AccountManager 클래스 구현 (include/arbitrage/common/account_manager.hpp)
+    - Account 구조체: ID, 거래소, API 키 참조, 가중치, 상태
+    - AccountStatus enum: Active, Disabled, RateLimited, Error, Maintenance
+    - AccountSelectionStrategy: RoundRobin, WeightedRandom, LeastUsed, HighestBalance
+  - 주요 기능
+    - add_account(), remove_account(), update_account()
+    - select_account(): 전략 기반 계정 선택
+    - get_total_balance(): 거래소별 잔고 합산
+    - refresh_balances(): 잔고 새로고침
+    - save_to_file(), load_from_file(): 설정 파일 관리
+  - SecretsManager 연동: api_key_ref, api_secret_ref로 암호화된 키 참조
+- Phase 5 (인프라) 50% 완료
 
 ### 세션 #12 (2026-01-27)
 - TASK_10 OrderBook Analyzer 완료
@@ -475,11 +488,11 @@ Phase 1 (기반):     ✅✅✅✅✅ 5/5 ✔️ 완료!
 Phase 2 (성능):     ✅✅ 2/2 ✔️ 완료!
 Phase 3 (거래):     ✅✅ 2/2 ✔️ 완료!
 Phase 4 (전략):     ✅✅✅✅✅ 5/5 ✔️ 완료!
-Phase 5 (인프라):   ✅✅⬜⬜⬜⬜ 2/6
+Phase 5 (인프라):   ✅✅✅⬜⬜⬜ 3/6
 Phase 6 (서버):     ⬜⬜⬜⬜⬜⬜ 0/6
 Phase 7 (모니터링): ⬜⬜⬜ 0/3
 
-총 진행률: 16/29 (55.2%)
+총 진행률: 17/29 (58.6%)
 ```
 
 > ⚠️ 실행 순서는 TASK_ORDER.md 참조
