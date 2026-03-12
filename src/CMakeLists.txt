@@ -7,6 +7,7 @@ add_library(common
     common/fxrate.cpp
     common/fee_calculator.cpp
     common/config_watcher.cpp
+    common/secrets.cpp
 )
 
 # Exchange WebSocket 라이브러리

@@ -32,6 +32,10 @@ enum class ErrorCode {
     ParseError = 302,
     InvalidState = 303,
     NotImplemented = 304,
+    FileError = 305,
+    CryptoError = 306,
+    InvalidParameter = 307,
+    NotFound = 308,
     
     // 비즈니스 에러 (400-499)
     BusinessError = 400,
