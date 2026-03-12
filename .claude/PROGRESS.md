@@ -32,6 +32,7 @@
 | 15 | Config Hot-reload | 2026-03-12 | ✅ 빌드 성공 | ConfigWatcher, MultiConfigWatcher, mtime 기반 |
 | 16 | Secrets Manager | 2026-03-12 | ✅ 빌드 성공 | AES-256-GCM, PBKDF2, SecureString |
 | 17 | Multi Account | 2026-03-12 | ✅ 빌드 성공 | AccountManager, 가중치 기반 선택, 잔고 통합 |
+| 18 | Symbol Master | 2026-03-12 | ✅ 빌드 성공 | 심볼 변환, 수량 정규화, XRP 기본값 |
 
 ---
 
@@ -39,7 +40,7 @@
 
 ### 현재: 없음
 
-다음 태스크: TASK_18 (Symbol Master)
+다음 태스크: TASK_19 (Event Bus)
 
 ---
 
@@ -221,7 +222,20 @@
     - refresh_balances(): 잔고 새로고침
     - save_to_file(), load_from_file(): 설정 파일 관리
   - SecretsManager 연동: api_key_ref, api_secret_ref로 암호화된 키 참조
-- Phase 5 (인프라) 50% 완료
+- TASK_18 Symbol Master 완료
+  - SymbolMaster 클래스 구현 (include/arbitrage/common/symbol_master.hpp)
+    - SymbolInfo 구조체: base, quote, native, unified, 거래 제한
+    - symbol_format 네임스페이스: 거래소별 심볼 변환 함수
+  - 주요 기능
+    - to_native(), to_unified(): 심볼 변환
+    - normalize_qty(), normalize_price(): 수량/가격 정규화
+    - validate_order(): 주문 유효성 검사
+    - init_xrp_defaults(): XRP 기본 설정 (4개 거래소)
+  - 심볼 형식
+    - Upbit: "KRW-XRP"
+    - Bithumb: "XRP_KRW"
+    - Binance/MEXC: "XRPUSDT"
+- Phase 5 (인프라) 67% 완료
 
 ### 세션 #12 (2026-01-27)
 - TASK_10 OrderBook Analyzer 완료
@@ -488,11 +502,11 @@ Phase 1 (기반):     ✅✅✅✅✅ 5/5 ✔️ 완료!
 Phase 2 (성능):     ✅✅ 2/2 ✔️ 완료!
 Phase 3 (거래):     ✅✅ 2/2 ✔️ 완료!
 Phase 4 (전략):     ✅✅✅✅✅ 5/5 ✔️ 완료!
-Phase 5 (인프라):   ✅✅✅⬜⬜⬜ 3/6
+Phase 5 (인프라):   ✅✅✅✅⬜⬜ 4/6
 Phase 6 (서버):     ⬜⬜⬜⬜⬜⬜ 0/6
 Phase 7 (모니터링): ⬜⬜⬜ 0/3
 
-총 진행률: 17/29 (58.6%)
+총 진행률: 18/29 (62.1%)
 ```
 
 > ⚠️ 실행 순서는 TASK_ORDER.md 참조
