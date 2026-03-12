@@ -33,6 +33,8 @@ add_library(strategy
     strategy/orderbook_analyzer.cpp
     strategy/risk_model.cpp
     strategy/decision_engine.cpp
+    strategy/strategy_executor.cpp
+    strategy/strategies/basic_arb_strategy.cpp
 )
 
 # Executor 라이브러리
