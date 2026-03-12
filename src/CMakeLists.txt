@@ -32,6 +32,7 @@ add_library(strategy
     strategy/slippage_model.cpp
     strategy/orderbook_analyzer.cpp
     strategy/risk_model.cpp
+    strategy/decision_engine.cpp
 )
 
 # Executor 라이브러리
