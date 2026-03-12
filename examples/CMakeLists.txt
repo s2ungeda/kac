@@ -204,3 +204,17 @@ target_link_libraries(fee_calculator_test
         common
         Threads::Threads
 )
+
+# Secrets Manager Test (TASK_16)
+add_executable(secrets_test secrets_test.cpp)
+
+target_link_libraries(secrets_test
+    PRIVATE
+        common
+        Threads::Threads
+)
+
+# OpenSSL 링크 (암호화에 필요)
+if(OpenSSL_FOUND)
+    target_link_libraries(secrets_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+endif()
