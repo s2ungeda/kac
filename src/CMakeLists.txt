@@ -9,6 +9,7 @@ add_library(common
     common/config_watcher.cpp
     common/secrets.cpp
     common/account_manager.cpp
+    common/symbol_master.cpp
 )
 
 # Exchange WebSocket 라이브러리
