@@ -27,6 +27,7 @@
 | 10 | OrderBook Analyzer | 2026-01-27 | ✅ 테스트 통과 | 유동성 분석, 슬리피지 예측, Maker+Taker 주문 계획 |
 | 11 | Fee Calculator | 2026-03-12 | ✅ 테스트 통과 | Maker/Taker 수수료, VIP 등급, 토큰 할인, 아비트라지 비용 |
 | 12 | Risk Model | 2026-03-12 | ✅ 빌드 성공 | 송금/시장/슬리피지 리스크, VaR, 김프 변동성 분석 |
+| 13 | Decision Engine | 2026-03-12 | ✅ 빌드 성공 | 기회 평가, 수량 결정, 킬스위치, 쿨다운 관리 |
 
 ---
 
@@ -34,7 +35,7 @@
 
 ### 현재: 없음
 
-다음 태스크: TASK_13 (Decision Engine)
+다음 태스크: TASK_14 (Strategy Plugin)
 
 ---
 
@@ -136,7 +137,28 @@
     - 가중치: Transfer 25%, Market 30%, Liquidity 25%, Slippage 20%
     - 수익/손실 분석 (expected_profit, max_loss)
     - 확률 추정 (profit_probability, full_fill_probability)
-- Phase 4 (전략) 60% 완료
+- TASK_13 Decision Engine 완료
+  - DecisionEngine 클래스 구현 (include/arbitrage/strategy/decision_engine.hpp)
+    - Decision enum: Execute, Skip, Wait, HoldOff
+    - DecisionReason enum: 15가지 결정 사유
+    - DecisionResult struct: 결정 결과 및 주문 요청
+    - StrategyConfig struct: 전략 설정값
+    - BalanceInfo struct: 잔액 정보
+  - 주요 기능
+    - evaluate(): 기회 평가 및 결정
+    - evaluate_with_orderbook(): 오더북 기반 정밀 평가
+    - calculate_optimal_qty(): 최적 수량 계산
+    - set_kill_switch(): 킬스위치 제어
+    - update_balance(): 잔액 업데이트
+    - record_trade_result(): 거래 결과 기록
+    - start_cooldown(): 쿨다운 시작
+  - 결정 로직
+    - 프리미엄 검증 (min/max)
+    - 리스크 점수 검증
+    - 잔액 검증
+    - 포지션 사이징
+    - 신뢰도 계산
+- Phase 4 (전략) 80% 완료
 
 ### 세션 #12 (2026-01-27)
 - TASK_10 OrderBook Analyzer 완료
@@ -371,12 +393,15 @@
 
 ## 📌 다음 세션에서 할 일
 
-1. Phase 4 계속 - 전략 구현
-   - TASK_13: Decision Engine (진입/청산 결정)
+1. Phase 4 완료 - 전략 구현
    - TASK_14: Strategy Plugin (전략 플러그인)
    - TASK_15: Trading Loop (메인 트레이딩 루프)
 
-2. 추가 저지연 최적화 (선택)
+2. Phase 5 시작 - 인프라
+   - TASK_16: Config System (설정 시스템)
+   - TASK_17: Thread Manager (스레드 관리)
+
+3. 추가 저지연 최적화 (선택)
    - SIMD 가속 (simdjson 적용)
    - CPU Affinity (스레드 코어 고정)
 
@@ -398,12 +423,12 @@
 Phase 1 (기반):     ✅✅✅✅✅ 5/5 ✔️ 완료!
 Phase 2 (성능):     ✅✅ 2/2 ✔️ 완료!
 Phase 3 (거래):     ✅✅ 2/2 ✔️ 완료!
-Phase 4 (전략):     ✅✅✅⬜⬜ 3/5
+Phase 4 (전략):     ✅✅✅✅⬜ 4/5
 Phase 5 (인프라):   ⬜⬜⬜⬜⬜⬜ 0/6
 Phase 6 (서버):     ⬜⬜⬜⬜⬜⬜ 0/6
 Phase 7 (모니터링): ⬜⬜⬜ 0/3
 
-총 진행률: 12/29 (41.4%)
+총 진행률: 13/29 (44.8%)
 ```
 
 > ⚠️ 실행 순서는 TASK_ORDER.md 참조
