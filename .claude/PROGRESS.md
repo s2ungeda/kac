@@ -7,7 +7,7 @@
 
 ## 📅 마지막 업데이트
 - 날짜: 2026-03-12
-- 세션: #13
+- 세션: #14
 
 ---
 
@@ -26,6 +26,7 @@
 | 09 | Transfer | 2026-01-27 | ✅ 테스트 통과 | TransferManager, 출금/입금 관리, Destination Tag 처리 |
 | 10 | OrderBook Analyzer | 2026-01-27 | ✅ 테스트 통과 | 유동성 분석, 슬리피지 예측, Maker+Taker 주문 계획 |
 | 11 | Fee Calculator | 2026-03-12 | ✅ 테스트 통과 | Maker/Taker 수수료, VIP 등급, 토큰 할인, 아비트라지 비용 |
+| 12 | Risk Model | 2026-03-12 | ✅ 빌드 성공 | 송금/시장/슬리피지 리스크, VaR, 김프 변동성 분석 |
 
 ---
 
@@ -33,7 +34,7 @@
 
 ### 현재: 없음
 
-다음 태스크: TASK_12 (Risk Model)
+다음 태스크: TASK_13 (Decision Engine)
 
 ---
 
@@ -112,6 +113,30 @@
     - MEXC: Maker 0%, Taker 0.02%
   - fee_calculator_test 예제 프로그램 (39개 테스트 모두 통과)
 - Phase 4 (전략) 40% 완료
+
+### 세션 #14 (2026-03-12)
+- TASK_12 Risk Model 완료
+  - RiskModel 클래스 구현 (include/arbitrage/strategy/risk_model.hpp)
+    - RiskLevel enum: Low, Medium, High, Critical
+    - RiskWarning enum: 10가지 경고 타입
+    - RiskAssessment struct: 종합 리스크 평가 결과
+    - PremiumStats struct: 김프 변동성 통계
+    - TransferTimeStats struct: 송금 시간 통계
+    - RiskModelConfig struct: 설정값 (가중치, 임계값 등)
+  - 주요 기능
+    - evaluate(): 기본 리스크 평가
+    - evaluate_with_orderbook(): 오더북 기반 정밀 평가
+    - calculate_transfer_risk(): 송금 리스크 (시간/거래소 기반)
+    - calculate_market_risk(): 시장 리스크 (김프 변동성)
+    - calculate_slippage_risk(): 슬리피지 리스크
+    - calculate_var(): Value at Risk 계산 (95%, 99%)
+    - record_premium() / get_premium_stats(): 김프 히스토리
+    - record_transfer_time() / get_transfer_stats(): 송금 시간 통계
+  - 리스크 점수 (0-100)
+    - 가중치: Transfer 25%, Market 30%, Liquidity 25%, Slippage 20%
+    - 수익/손실 분석 (expected_profit, max_loss)
+    - 확률 추정 (profit_probability, full_fill_probability)
+- Phase 4 (전략) 60% 완료
 
 ### 세션 #12 (2026-01-27)
 - TASK_10 OrderBook Analyzer 완료
@@ -347,9 +372,9 @@
 ## 📌 다음 세션에서 할 일
 
 1. Phase 4 계속 - 전략 구현
-   - TASK_12: Risk Model (리스크 모델)
    - TASK_13: Decision Engine (진입/청산 결정)
    - TASK_14: Strategy Plugin (전략 플러그인)
+   - TASK_15: Trading Loop (메인 트레이딩 루프)
 
 2. 추가 저지연 최적화 (선택)
    - SIMD 가속 (simdjson 적용)
@@ -373,12 +398,12 @@
 Phase 1 (기반):     ✅✅✅✅✅ 5/5 ✔️ 완료!
 Phase 2 (성능):     ✅✅ 2/2 ✔️ 완료!
 Phase 3 (거래):     ✅✅ 2/2 ✔️ 완료!
-Phase 4 (전략):     ✅✅⬜⬜⬜ 2/5
+Phase 4 (전략):     ✅✅✅⬜⬜ 3/5
 Phase 5 (인프라):   ⬜⬜⬜⬜⬜⬜ 0/6
 Phase 6 (서버):     ⬜⬜⬜⬜⬜⬜ 0/6
 Phase 7 (모니터링): ⬜⬜⬜ 0/3
 
-총 진행률: 11/29 (37.9%)
+총 진행률: 12/29 (41.4%)
 ```
 
 > ⚠️ 실행 순서는 TASK_ORDER.md 참조
