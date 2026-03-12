@@ -34,6 +34,7 @@
 | 17 | Multi Account | 2026-03-12 | ✅ 빌드 성공 | AccountManager, 가중치 기반 선택, 잔고 통합 |
 | 18 | Symbol Master | 2026-03-12 | ✅ 빌드 성공 | 심볼 변환, 수량 정규화, XRP 기본값 |
 | 19 | Event Bus | 2026-03-12 | ✅ 테스트 통과 | Pub/Sub, 타입 안전 구독, 비동기 처리 |
+| 20 | Thread Manager | 2026-03-12 | ✅ 테스트 통과 | 어피니티, 우선순위, NUMA, 시스템 토폴로지 |
 
 ---
 
@@ -41,7 +42,7 @@
 
 ### 현재: 없음
 
-다음 태스크: TASK_20 (Thread Manager)
+다음 태스크: TASK_21 (HTTP Server) - Phase 6 시작
 
 ---
 
@@ -260,6 +261,26 @@
     - 예외 안전 핸들러 호출
   - event_bus_test: 30개 테스트 모두 통과
 - Phase 5 (인프라) 83% 완료
+- TASK_20 Thread Manager 완료
+  - thread_config.hpp: 스레드 설정 타입
+    - ThreadPriority enum: Idle, Low, Normal, High, RealTime
+    - ThreadConfig struct: 이름, 코어 ID, 코어셋, 우선순위, NUMA 노드
+    - ThreadManagerConfig: 전역 설정 (affinity/priority/numa 활성화)
+    - ThreadStats: 스레드 통계 (이름, 코어, 우선순위, is_alive)
+    - SystemTopology: 시스템 토폴로지 캐시
+  - thread_manager.hpp/cpp: ThreadManager 클래스
+    - set_current_affinity(): pthread_setaffinity_np 래퍼
+    - set_current_priority(): pthread_setschedparam / setpriority
+    - get_system_topology(): /proc/cpuinfo 파싱
+    - create_thread(): 설정 자동 적용 스레드 생성
+    - register/unregister_thread(): 스레드 추적
+    - get_all_stats(): 관리 스레드 통계
+  - numa_allocator.hpp/cpp: NUMA 인식 메모리 할당
+    - NumaAllocator<T>: STL 호환 할당자
+    - NumaBuffer: NUMA 지역 버퍼
+    - is_numa_available(): NUMA 지원 확인
+  - thread_manager_test.cpp: 48개 테스트 모두 통과
+- Phase 5 (인프라) 100% 완료!
 
 ### 세션 #12 (2026-01-27)
 - TASK_10 OrderBook Analyzer 완료
@@ -526,11 +547,11 @@ Phase 1 (기반):     ✅✅✅✅✅ 5/5 ✔️ 완료!
 Phase 2 (성능):     ✅✅ 2/2 ✔️ 완료!
 Phase 3 (거래):     ✅✅ 2/2 ✔️ 완료!
 Phase 4 (전략):     ✅✅✅✅✅ 5/5 ✔️ 완료!
-Phase 5 (인프라):   ✅✅✅✅✅⬜ 5/6
+Phase 5 (인프라):   ✅✅✅✅✅✅ 6/6 ✔️ 완료!
 Phase 6 (서버):     ⬜⬜⬜⬜⬜⬜ 0/6
 Phase 7 (모니터링): ⬜⬜⬜ 0/3
 
-총 진행률: 19/29 (65.5%)
+총 진행률: 20/29 (69.0%)
 ```
 
 > ⚠️ 실행 순서는 TASK_ORDER.md 참조

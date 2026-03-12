@@ -228,3 +228,12 @@ target_link_libraries(event_bus_test
         infra
         Threads::Threads
 )
+
+# Thread Manager Test (TASK_20)
+add_executable(thread_manager_test thread_manager_test.cpp)
+
+target_link_libraries(thread_manager_test
+    PRIVATE
+        common
+        Threads::Threads
+)

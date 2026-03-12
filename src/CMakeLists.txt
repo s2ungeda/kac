@@ -10,6 +10,8 @@ add_library(common
     common/secrets.cpp
     common/account_manager.cpp
     common/symbol_master.cpp
+    common/thread_manager.cpp
+    common/numa_allocator.cpp
 )
 
 # Exchange WebSocket 라이브러리
