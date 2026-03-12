@@ -30,6 +30,7 @@
 | 13 | Decision Engine | 2026-03-12 | ✅ 빌드 성공 | 기회 평가, 수량 결정, 킬스위치, 쿨다운 관리 |
 | 14 | Strategy Plugin | 2026-03-12 | ✅ 빌드 성공 | IStrategy, StrategyExecutor, BasicArbStrategy |
 | 15 | Config Hot-reload | 2026-03-12 | ✅ 빌드 성공 | ConfigWatcher, MultiConfigWatcher, mtime 기반 |
+| 16 | Secrets Manager | 2026-03-12 | ✅ 빌드 성공 | AES-256-GCM, PBKDF2, SecureString |
 
 ---
 
@@ -37,7 +38,7 @@
 
 ### 현재: 없음
 
-다음 태스크: TASK_16 (Thread Manager)
+다음 태스크: TASK_17 (Multi Account)
 
 ---
 
@@ -196,7 +197,18 @@
     - Config 싱글톤과 호환되는 설계
     - shared_mutex 기반 스레드 안전성
     - 글로벌 인스턴스 접근자 config_watcher()
-- Phase 5 (인프라) 17% 완료
+- TASK_16 Secrets Manager 완료
+  - SecretsManager 클래스 구현 (include/arbitrage/common/secrets.hpp)
+    - AES-256-GCM 암호화 (OpenSSL EVP API)
+    - PBKDF2 키 유도 (100K iterations, SHA256)
+    - store(), retrieve(), remove() 시크릿 관리
+    - save_to_file(), load_from_file() 파일 저장/로드
+    - change_master_password() 비밀번호 변경 (재암호화)
+  - SecureString 클래스: 소멸 시 자동 메모리 정리
+  - EncryptedData 구조체: IV + Tag + Ciphertext 관리
+  - 글로벌 인스턴스: init_secrets_manager(), secrets_manager()
+  - error.hpp에 새 ErrorCode 추가: FileError, CryptoError, InvalidParameter, NotFound
+- Phase 5 (인프라) 33% 완료
 
 ### 세션 #12 (2026-01-27)
 - TASK_10 OrderBook Analyzer 완료
@@ -432,9 +444,9 @@
 ## 📌 다음 세션에서 할 일
 
 1. Phase 5 계속 - 인프라
-   - TASK_16: Thread Manager (스레드 관리)
-   - TASK_17: Event Bus (이벤트 버스)
-   - TASK_18: Metrics Collector (메트릭 수집)
+   - TASK_17: Multi Account (다중 계정 지원)
+   - TASK_18: Symbol Master (심볼 매핑)
+   - TASK_19: Event Bus (이벤트 버스)
 
 2. Phase 6 - 서버
    - TASK_21: HTTP Server (모니터링 API)
@@ -463,11 +475,11 @@ Phase 1 (기반):     ✅✅✅✅✅ 5/5 ✔️ 완료!
 Phase 2 (성능):     ✅✅ 2/2 ✔️ 완료!
 Phase 3 (거래):     ✅✅ 2/2 ✔️ 완료!
 Phase 4 (전략):     ✅✅✅✅✅ 5/5 ✔️ 완료!
-Phase 5 (인프라):   ✅⬜⬜⬜⬜⬜ 1/6
+Phase 5 (인프라):   ✅✅⬜⬜⬜⬜ 2/6
 Phase 6 (서버):     ⬜⬜⬜⬜⬜⬜ 0/6
 Phase 7 (모니터링): ⬜⬜⬜ 0/3
 
-총 진행률: 15/29 (51.7%)
+총 진행률: 16/29 (55.2%)
 ```
 
 > ⚠️ 실행 순서는 TASK_ORDER.md 참조
