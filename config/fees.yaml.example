@@ -1,0 +1,126 @@
+# 거래소별 수수료 설정
+# Fee Calculator (TASK_11)
+#
+# 주의: 실제 수수료는 VIP 등급, 쿠폰, 이벤트에 따라 다를 수 있습니다.
+#       운영 환경에서는 API를 통해 실시간으로 확인하세요.
+
+exchanges:
+  upbit:
+    # 업비트는 Maker/Taker 구분 없음
+    maker_fee_pct: 0.05
+    taker_fee_pct: 0.05
+    # 업비트는 VIP 등급 없음
+    vip_levels: []
+    # 출금 수수료 (코인별)
+    withdraw_fees:
+      XRP: 1.0
+      BTC: 0.0005
+      ETH: 0.01
+    # 최소 출금 수량
+    min_withdraw:
+      XRP: 21
+      BTC: 0.001
+      ETH: 0.01
+
+  bithumb:
+    maker_fee_pct: 0.04
+    taker_fee_pct: 0.04
+    # 빗썸 VIP 등급
+    vip_levels:
+      - level: 1
+        maker: 0.035
+        taker: 0.035
+      - level: 2
+        maker: 0.030
+        taker: 0.030
+    withdraw_fees:
+      XRP: 1.0
+      BTC: 0.001
+      ETH: 0.01
+    min_withdraw:
+      XRP: 20
+      BTC: 0.001
+      ETH: 0.01
+
+  binance:
+    maker_fee_pct: 0.10
+    taker_fee_pct: 0.10
+    # BNB 결제 시 25% 할인
+    bnb_discount_pct: 25
+    # Binance VIP 등급 (30일 거래량 기준)
+    vip_levels:
+      - level: 1  # 1M USDT+
+        maker: 0.09
+        taker: 0.10
+      - level: 2  # 5M USDT+
+        maker: 0.08
+        taker: 0.10
+      - level: 3  # 10M USDT+
+        maker: 0.07
+        taker: 0.09
+      - level: 4  # 25M USDT+
+        maker: 0.06
+        taker: 0.08
+      - level: 5  # 100M USDT+
+        maker: 0.05
+        taker: 0.07
+    withdraw_fees:
+      XRP: 0.25
+      BTC: 0.0002
+      ETH: 0.005
+    min_withdraw:
+      XRP: 25
+      BTC: 0.001
+      ETH: 0.01
+
+  mexc:
+    # MEXC Maker 무료!
+    maker_fee_pct: 0.00
+    taker_fee_pct: 0.02
+    # MX 토큰 20% 할인
+    mx_discount_pct: 20
+    # MEXC VIP 없음 (기본 수수료가 이미 낮음)
+    vip_levels: []
+    withdraw_fees:
+      XRP: 0.25
+      BTC: 0.0003
+      ETH: 0.005
+    min_withdraw:
+      XRP: 20
+      BTC: 0.001
+      ETH: 0.01
+
+
+# =============================================================================
+# 손익분기 계산 예시
+# =============================================================================
+#
+# Binance(Maker) -> Upbit(Taker) 아비트라지:
+#
+# 매수 수수료 (Binance Maker):
+#   - 기본: 0.10%
+#   - BNB 할인: 0.075%
+#
+# 매도 수수료 (Upbit Taker):
+#   - 기본: 0.05%
+#
+# 출금 수수료 (XRP 1000개 기준):
+#   - Binance: 0.25 XRP = 약 0.025%
+#
+# 총 수수료: 0.075% + 0.05% + 0.025% = 0.15%
+#
+# --> 최소 김프 0.15% + 슬리피지 마진 필요
+# --> 안전한 진입점: 0.3% 이상
+#
+# =============================================================================
+# MEXC(Maker) -> Upbit(Taker) 아비트라지 (최적):
+#
+# 매수 수수료 (MEXC Maker): 0.00%
+# 매도 수수료 (Upbit Taker): 0.05%
+# 출금 수수료: 0.25 XRP = 약 0.025%
+#
+# 총 수수료: 0.00% + 0.05% + 0.025% = 0.075%
+#
+# --> 최소 김프 0.075% + 슬리피지
+# --> 안전한 진입점: 0.2% 이상
+# =============================================================================

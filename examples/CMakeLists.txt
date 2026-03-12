@@ -195,3 +195,12 @@ target_link_libraries(orderbook_analyzer_test
         strategy
         Threads::Threads
 )
+
+# Fee Calculator Test (TASK_11)
+add_executable(fee_calculator_test fee_calculator_test.cpp)
+
+target_link_libraries(fee_calculator_test
+    PRIVATE
+        common
+        Threads::Threads
+)

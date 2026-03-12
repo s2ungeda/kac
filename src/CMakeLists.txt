@@ -5,6 +5,7 @@ add_library(common
     common/http_client.cpp
     common/crypto.cpp
     common/fxrate.cpp
+    common/fee_calculator.cpp
 )
 
 # Exchange WebSocket 라이브러리

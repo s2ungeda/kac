@@ -6,8 +6,8 @@
 ---
 
 ## 📅 마지막 업데이트
-- 날짜: 2026-01-27
-- 세션: #11
+- 날짜: 2026-03-12
+- 세션: #13
 
 ---
 
@@ -25,6 +25,7 @@
 | 08 | Executor | 2026-01-27 | ✅ 테스트 통과 | DualOrderExecutor, RecoveryManager, std::async 병렬 실행 |
 | 09 | Transfer | 2026-01-27 | ✅ 테스트 통과 | TransferManager, 출금/입금 관리, Destination Tag 처리 |
 | 10 | OrderBook Analyzer | 2026-01-27 | ✅ 테스트 통과 | 유동성 분석, 슬리피지 예측, Maker+Taker 주문 계획 |
+| 11 | Fee Calculator | 2026-03-12 | ✅ 테스트 통과 | Maker/Taker 수수료, VIP 등급, 토큰 할인, 아비트라지 비용 |
 
 ---
 
@@ -32,7 +33,7 @@
 
 ### 현재: 없음
 
-다음 태스크: TASK_11 (Fee Calculator)
+다음 태스크: TASK_12 (Risk Model)
 
 ---
 
@@ -88,6 +89,29 @@
   - Bithumb/MEXC WebSocket 구현
   - Protobuf 파서 추가 (MEXC용)
 - 각종 테스트 프로그램 작성
+
+### 세션 #13 (2026-03-12)
+- TASK_11 Fee Calculator 완료
+  - FeeCalculator 클래스 구현 (include/arbitrage/common/fee_calculator.hpp)
+    - OrderRole enum: Maker/Taker 구분
+    - ExchangeFeeConfig: 거래소별 수수료 설정
+    - TradeCost: 거래 비용 상세 (수량, 가격, 수수료)
+    - TransferCost: 송금 비용 상세 (출금 수수료)
+    - ArbitrageCost: 아비트라지 총 비용 (매수+매도+송금)
+  - 주요 기능
+    - 거래 수수료 계산 (Maker/Taker)
+    - VIP 등급별 할인 (Binance VIP 1~5, Bithumb VIP 1~2)
+    - 토큰 할인 (Binance BNB 25%, MEXC MX 20%)
+    - 출금 수수료 계산 (코인별)
+    - 손익분기 프리미엄 계산
+    - YAML 설정 파일 로드 (config/fees.yaml)
+  - 기본 수수료 설정
+    - Upbit: Maker/Taker 0.05%
+    - Bithumb: Maker/Taker 0.04%
+    - Binance: Maker/Taker 0.10% (BNB 시 0.075%)
+    - MEXC: Maker 0%, Taker 0.02%
+  - fee_calculator_test 예제 프로그램 (39개 테스트 모두 통과)
+- Phase 4 (전략) 40% 완료
 
 ### 세션 #12 (2026-01-27)
 - TASK_10 OrderBook Analyzer 완료
@@ -323,7 +347,6 @@
 ## 📌 다음 세션에서 할 일
 
 1. Phase 4 계속 - 전략 구현
-   - TASK_11: Fee Calculator (수수료 계산기)
    - TASK_12: Risk Model (리스크 모델)
    - TASK_13: Decision Engine (진입/청산 결정)
    - TASK_14: Strategy Plugin (전략 플러그인)
@@ -350,12 +373,12 @@
 Phase 1 (기반):     ✅✅✅✅✅ 5/5 ✔️ 완료!
 Phase 2 (성능):     ✅✅ 2/2 ✔️ 완료!
 Phase 3 (거래):     ✅✅ 2/2 ✔️ 완료!
-Phase 4 (전략):     ✅⬜⬜⬜⬜ 1/5
+Phase 4 (전략):     ✅✅⬜⬜⬜ 2/5
 Phase 5 (인프라):   ⬜⬜⬜⬜⬜⬜ 0/6
 Phase 6 (서버):     ⬜⬜⬜⬜⬜⬜ 0/6
 Phase 7 (모니터링): ⬜⬜⬜ 0/3
 
-총 진행률: 10/29 (34.5%)
+총 진행률: 11/29 (37.9%)
 ```
 
 > ⚠️ 실행 순서는 TASK_ORDER.md 참조
