@@ -29,6 +29,7 @@
 | 12 | Risk Model | 2026-03-12 | ✅ 빌드 성공 | 송금/시장/슬리피지 리스크, VaR, 김프 변동성 분석 |
 | 13 | Decision Engine | 2026-03-12 | ✅ 빌드 성공 | 기회 평가, 수량 결정, 킬스위치, 쿨다운 관리 |
 | 14 | Strategy Plugin | 2026-03-12 | ✅ 빌드 성공 | IStrategy, StrategyExecutor, BasicArbStrategy |
+| 15 | Config Hot-reload | 2026-03-12 | ✅ 빌드 성공 | ConfigWatcher, MultiConfigWatcher, mtime 기반 |
 
 ---
 
@@ -36,7 +37,7 @@
 
 ### 현재: 없음
 
-다음 태스크: TASK_15 (Trading Loop)
+다음 태스크: TASK_16 (Thread Manager)
 
 ---
 
@@ -182,6 +183,20 @@
     - 해외 매수 (Binance/MEXC), 국내 매도 (Upbit/Bithumb)
     - 파라미터: min_premium_pct, max_position_xrp, fee_pct
 - Phase 4 (전략) 100% 완료!
+- TASK_15 Config Hot-reload 완료
+  - ConfigWatcher 클래스 구현 (include/arbitrage/common/config_watcher.hpp)
+    - mtime 기반 파일 변경 감지
+    - ReloadCallback, ErrorCallback, ChangeCallback 콜백
+    - ConfigChangeEvent: 변경 이벤트 상세
+    - Stats: check_count, reload_count, error_count 추적
+  - MultiConfigWatcher 클래스
+    - 다중 파일 동시 감시
+    - 파일별 개별 콜백
+  - 구현 파일 (src/common/config_watcher.cpp)
+    - Config 싱글톤과 호환되는 설계
+    - shared_mutex 기반 스레드 안전성
+    - 글로벌 인스턴스 접근자 config_watcher()
+- Phase 5 (인프라) 17% 완료
 
 ### 세션 #12 (2026-01-27)
 - TASK_10 OrderBook Analyzer 완료
@@ -416,10 +431,10 @@
 
 ## 📌 다음 세션에서 할 일
 
-1. Phase 5 시작 - 인프라
-   - TASK_15: Config System (설정 시스템)
+1. Phase 5 계속 - 인프라
    - TASK_16: Thread Manager (스레드 관리)
    - TASK_17: Event Bus (이벤트 버스)
+   - TASK_18: Metrics Collector (메트릭 수집)
 
 2. Phase 6 - 서버
    - TASK_21: HTTP Server (모니터링 API)
@@ -448,11 +463,11 @@ Phase 1 (기반):     ✅✅✅✅✅ 5/5 ✔️ 완료!
 Phase 2 (성능):     ✅✅ 2/2 ✔️ 완료!
 Phase 3 (거래):     ✅✅ 2/2 ✔️ 완료!
 Phase 4 (전략):     ✅✅✅✅✅ 5/5 ✔️ 완료!
-Phase 5 (인프라):   ⬜⬜⬜⬜⬜⬜ 0/6
+Phase 5 (인프라):   ✅⬜⬜⬜⬜⬜ 1/6
 Phase 6 (서버):     ⬜⬜⬜⬜⬜⬜ 0/6
 Phase 7 (모니터링): ⬜⬜⬜ 0/3
 
-총 진행률: 14/29 (48.3%)
+총 진행률: 15/29 (51.7%)
 ```
 
 > ⚠️ 실행 순서는 TASK_ORDER.md 참조
