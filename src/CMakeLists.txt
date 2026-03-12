@@ -48,6 +48,11 @@ add_library(executor
     executor/transfer.cpp
 )
 
+# Infra 라이브러리 (TASK_19)
+add_library(infra
+    infra/event_bus.cpp
+)
+
 # 공통 라이브러리 링크
 target_link_libraries(common
     PUBLIC
@@ -122,6 +127,13 @@ target_link_libraries(executor
         Threads::Threads
 )
 
+# Infra 라이브러리 링크 (TASK_19)
+target_link_libraries(infra
+    PUBLIC
+        common
+        Threads::Threads
+)
+
 # 메인 실행 파일
 add_executable(arbitrage
     main.cpp
@@ -132,6 +144,7 @@ target_link_libraries(arbitrage
         common
         strategy
         executor
+        infra
         exchange_websocket
         exchange_order
         Threads::Threads

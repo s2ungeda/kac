@@ -218,3 +218,13 @@ target_link_libraries(secrets_test
 if(OpenSSL_FOUND)
     target_link_libraries(secrets_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 endif()
+
+# Event Bus Test (TASK_19)
+add_executable(event_bus_test event_bus_test.cpp)
+
+target_link_libraries(event_bus_test
+    PRIVATE
+        common
+        infra
+        Threads::Threads
+)

@@ -33,6 +33,7 @@
 | 16 | Secrets Manager | 2026-03-12 | ✅ 빌드 성공 | AES-256-GCM, PBKDF2, SecureString |
 | 17 | Multi Account | 2026-03-12 | ✅ 빌드 성공 | AccountManager, 가중치 기반 선택, 잔고 통합 |
 | 18 | Symbol Master | 2026-03-12 | ✅ 빌드 성공 | 심볼 변환, 수량 정규화, XRP 기본값 |
+| 19 | Event Bus | 2026-03-12 | ✅ 테스트 통과 | Pub/Sub, 타입 안전 구독, 비동기 처리 |
 
 ---
 
@@ -40,7 +41,7 @@
 
 ### 현재: 없음
 
-다음 태스크: TASK_19 (Event Bus)
+다음 태스크: TASK_20 (Thread Manager)
 
 ---
 
@@ -236,6 +237,29 @@
     - Bithumb: "XRP_KRW"
     - Binance/MEXC: "XRPUSDT"
 - Phase 5 (인프라) 67% 완료
+- secrets_test 추가
+  - 43개 테스트 모두 통과
+  - AES-GCM 암호화/복호화, PBKDF2, 파일 저장/로드, SecureString 테스트
+- TASK_19 Event Bus 완료
+  - events.hpp: 22개 이벤트 타입 (std::variant 기반)
+    - 시세: TickerReceived, OrderBookUpdated
+    - 김프: PremiumUpdated, OpportunityDetected
+    - 주문: OrderSubmitted, OrderFilled, OrderPartialFilled, OrderCanceled, OrderFailed
+    - 듀얼 주문: DualOrderStarted, DualOrderCompleted
+    - 송금: TransferStarted, TransferCompleted, TransferFailed
+    - 시스템: ExchangeConnected, ExchangeDisconnected, KillSwitchActivated, KillSwitchDeactivated, ConfigReloaded, DailyLossLimitReached, SystemStarted, SystemShutdown
+  - event_bus.hpp: EventBus 클래스
+    - SubscriptionToken: 구독 토큰
+    - SubscriptionGuard: RAII 자동 해제
+    - subscribe<E>(): 타입 안전 구독
+    - subscribe_all(): 모든 이벤트 구독
+    - publish(): 동기/비동기 이벤트 발행
+    - start_async(): 워커 스레드 시작
+  - event_bus.cpp: 구현 파일
+    - 핸들러 복사 후 락 외부에서 호출 (성능 최적화)
+    - 예외 안전 핸들러 호출
+  - event_bus_test: 30개 테스트 모두 통과
+- Phase 5 (인프라) 83% 완료
 
 ### 세션 #12 (2026-01-27)
 - TASK_10 OrderBook Analyzer 완료
@@ -502,11 +526,11 @@ Phase 1 (기반):     ✅✅✅✅✅ 5/5 ✔️ 완료!
 Phase 2 (성능):     ✅✅ 2/2 ✔️ 완료!
 Phase 3 (거래):     ✅✅ 2/2 ✔️ 완료!
 Phase 4 (전략):     ✅✅✅✅✅ 5/5 ✔️ 완료!
-Phase 5 (인프라):   ✅✅✅✅⬜⬜ 4/6
+Phase 5 (인프라):   ✅✅✅✅✅⬜ 5/6
 Phase 6 (서버):     ⬜⬜⬜⬜⬜⬜ 0/6
 Phase 7 (모니터링): ⬜⬜⬜ 0/3
 
-총 진행률: 18/29 (62.1%)
+총 진행률: 19/29 (65.5%)
 ```
 
 > ⚠️ 실행 순서는 TASK_ORDER.md 참조
