@@ -8,6 +8,7 @@ add_library(common
     common/fee_calculator.cpp
     common/config_watcher.cpp
     common/secrets.cpp
+    common/account_manager.cpp
 )
 
 # Exchange WebSocket 라이브러리
