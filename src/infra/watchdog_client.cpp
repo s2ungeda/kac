@@ -306,7 +306,9 @@ void WatchdogClient::notify_command(WatchdogCommand cmd, const std::string& payl
     for (auto& cb : callbacks) {
         try {
             cb(cmd, payload);
-        } catch (...) {}
+        } catch (const std::exception& e) {
+            // 명령 콜백 에러 (처리 계속)
+        }
     }
 }
 
@@ -320,7 +322,9 @@ void WatchdogClient::notify_connection_change(bool connected) {
     for (auto& cb : callbacks) {
         try {
             cb(connected);
-        } catch (...) {}
+        } catch (const std::exception& e) {
+            // 연결 상태 콜백 에러 (처리 계속)
+        }
     }
 }
 

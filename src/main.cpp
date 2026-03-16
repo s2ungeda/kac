@@ -127,7 +127,7 @@ int main(int argc, char* argv[]) {
 
     logger->info("Starting Kimchi Arbitrage System");
     logger->info("Config: {}", config_path);
-2
+
     // 설정 로드
     Config::instance().load(config_path);
 

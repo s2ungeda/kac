@@ -295,7 +295,9 @@ void DailyLossLimiter::check_and_trigger() {
         if (cb) {
             try {
                 cb(current_loss, limit, usage_pct);
-            } catch (...) {}
+            } catch (const std::exception& e) {
+                // 경고 콜백 에러 (처리 계속)
+            }
         }
     }
 
@@ -311,7 +313,9 @@ void DailyLossLimiter::check_and_trigger() {
         if (cb) {
             try {
                 cb(current_loss, limit, usage_pct);
-            } catch (...) {}
+            } catch (const std::exception& e) {
+                // 위험 콜백 에러 (처리 계속)
+            }
         }
     }
 
@@ -329,7 +333,9 @@ void DailyLossLimiter::check_and_trigger() {
             if (kill_cb) {
                 try {
                     kill_cb();
-                } catch (...) {}
+                } catch (const std::exception& e) {
+                    // 킬스위치 콜백 에러 (처리 계속)
+                }
             }
 
             // EventBus 이벤트 발행

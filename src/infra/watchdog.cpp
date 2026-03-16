@@ -214,7 +214,9 @@ void Watchdog::handle_heartbeat(const Heartbeat& hb) {
     for (auto& cb : callbacks) {
         try {
             cb(hb);
-        } catch (...) {}
+        } catch (const std::exception& e) {
+            // 하트비트 콜백 에러 (처리 계속)
+        }
     }
 
     // EventBus 이벤트 발행
@@ -346,7 +348,9 @@ void Watchdog::cleanup_old_snapshots(int keep_count) {
     for (size_t i = keep_count; i < snapshots.size(); ++i) {
         try {
             std::filesystem::remove(snapshots[i]);
-        } catch (...) {}
+        } catch (const std::exception& e) {
+            // 스냅샷 삭제 실패 (무시하고 계속)
+        }
     }
 }
 
@@ -562,7 +566,9 @@ void Watchdog::do_restart(const std::string& reason) {
     for (auto& cb : callbacks) {
         try {
             cb(old_pid, new_pid, reason);
-        } catch (...) {}
+        } catch (const std::exception& e) {
+            // 재시작 콜백 에러 (처리 계속)
+        }
     }
 
     // 알림
@@ -606,7 +612,9 @@ void Watchdog::send_alert(const std::string& level, const std::string& message) 
     for (auto& cb : callbacks) {
         try {
             cb(level, message);
-        } catch (...) {}
+        } catch (const std::exception& e) {
+            // 알림 콜백 에러 (처리 계속)
+        }
     }
 
     // AlertService 사용

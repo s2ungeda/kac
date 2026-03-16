@@ -163,12 +163,9 @@ void WebSocketClientBase::on_handshake(beast::error_code ec) {
     connected_ = true;
     reconnect_count_ = 0;
     
-    // 통계 업데이트
-    {
-        std::lock_guard<std::mutex> lock(stats_mutex_);
-        stats_.connected_at = std::chrono::steady_clock::now();
-    }
-    
+    // 통계 업데이트 (atomic 기반, lock 불필요)
+    stats_.connected_at = std::chrono::steady_clock::now();
+
     logger_->debug("[{}] WebSocket connected", exchange_name(exchange_));
     
     // Connected 이벤트 발행
@@ -207,13 +204,10 @@ void WebSocketClientBase::on_read(beast::error_code ec, std::size_t bytes_transf
         return fail(ec, "read");
     }
     
-    // 통계 업데이트
-    {
-        std::lock_guard<std::mutex> lock(stats_mutex_);
-        stats_.messages_received++;
-        stats_.bytes_received += bytes_transferred;
-    }
-    
+    // 통계 업데이트 (atomic 기반)
+    stats_.messages_received.fetch_add(1, std::memory_order_relaxed);
+    stats_.bytes_received.fetch_add(bytes_transferred, std::memory_order_relaxed);
+
     // 메시지 파싱
     std::string message = beast::buffers_to_string(buffer_.data());
     buffer_.consume(bytes_transferred);
@@ -234,11 +228,11 @@ void WebSocketClientBase::send_message(const std::string& message) {
         [self = shared_from_this(), message]() {
             bool write_in_progress = false;
             {
-                std::lock_guard<std::mutex> lock(self->write_mutex_);
+                std::lock_guard<SpinLock> lock(self->write_lock_);
                 write_in_progress = !self->write_queue_.empty();
                 self->write_queue_.push(message);
             }
-            
+
             if (!write_in_progress) {
                 self->do_write();
             }
@@ -246,11 +240,11 @@ void WebSocketClientBase::send_message(const std::string& message) {
 }
 
 void WebSocketClientBase::do_write() {
-    std::lock_guard<std::mutex> lock(write_mutex_);
+    std::lock_guard<SpinLock> lock(write_lock_);
     if (write_queue_.empty() || writing_) {
         return;
     }
-    
+
     writing_ = true;
     ws_->async_write(
         net::buffer(write_queue_.front()),
@@ -263,13 +257,13 @@ void WebSocketClientBase::on_write(beast::error_code ec, std::size_t bytes_trans
     if (ec) {
         return fail(ec, "write");
     }
-    
+
     {
-        std::lock_guard<std::mutex> lock(write_mutex_);
+        std::lock_guard<SpinLock> lock(write_lock_);
         write_queue_.pop();
         writing_ = false;
     }
-    
+
     // 다음 메시지 전송
     do_write();
 }
@@ -350,12 +344,9 @@ void WebSocketClientBase::schedule_reconnect() {
     logger_->debug("[{}] Reconnecting in {} seconds (attempt {})",
                    exchange_name(exchange_), delay_seconds, reconnect_count_);
     
-    // 통계 업데이트
-    {
-        std::lock_guard<std::mutex> lock(stats_mutex_);
-        stats_.reconnect_count++;
-    }
-    
+    // 통계 업데이트 (atomic 기반)
+    stats_.reconnect_count.fetch_add(1, std::memory_order_relaxed);
+
     reconnect_timer_.expires_after(std::chrono::seconds(delay_seconds));
     reconnect_timer_.async_wait(
         beast::bind_front_handler(
@@ -385,9 +376,8 @@ void WebSocketClientBase::emit_event(WebSocketEvent&& evt) {
     }
 }
 
-WebSocketClientBase::Stats WebSocketClientBase::get_stats() const {
-    std::lock_guard<std::mutex> lock(stats_mutex_);
-    return stats_;
+WebSocketClientBase::Stats::Snapshot WebSocketClientBase::get_stats() const {
+    return stats_.snapshot();
 }
 
 }  // namespace arbitrage

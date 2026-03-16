@@ -430,7 +430,9 @@ void TcpServer::accept_loop() {
         if (cb) {
             try {
                 cb(client_id, info);
-            } catch (...) {}
+            } catch (const std::exception& e) {
+                // 콜백 에러 로깅 (연결 처리 계속)
+            }
         }
     }
 }
@@ -686,7 +688,9 @@ void TcpServer::process_message(int client_id, const Message& message) {
     if (cb) {
         try {
             cb(client_id, message);
-        } catch (...) {}
+        } catch (const std::exception& e) {
+            // 메시지 콜백 에러 로깅 (처리 계속)
+        }
     }
 }
 
@@ -806,7 +810,9 @@ void TcpServer::remove_client(int client_id) {
         if (cb) {
             try {
                 cb(client_id, info);
-            } catch (...) {}
+            } catch (const std::exception& e) {
+                // 연결 해제 콜백 에러 로깅 (처리 계속)
+            }
         }
     }
 }

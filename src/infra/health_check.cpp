@@ -452,13 +452,17 @@ void HealthChecker::notify_alerts(const SystemHealth& health) {
             for (const auto& cb : unhealthy_cbs) {
                 try {
                     cb(component);
-                } catch (...) {}
+                } catch (const std::exception& e) {
+                    // Unhealthy 콜백 에러 (처리 계속)
+                }
             }
         } else if (component.is_degraded()) {
             for (const auto& cb : degraded_cbs) {
                 try {
                     cb(component);
-                } catch (...) {}
+                } catch (const std::exception& e) {
+                    // Degraded 콜백 에러 (처리 계속)
+                }
             }
         }
     }
@@ -467,7 +471,9 @@ void HealthChecker::notify_alerts(const SystemHealth& health) {
     for (const auto& cb : status_cbs) {
         try {
             cb(health);
-        } catch (...) {}
+        } catch (const std::exception& e) {
+            // 상태 변경 콜백 에러 (처리 계속)
+        }
     }
 
     // EventBus로 KillSwitch 이벤트 발행 (Unhealthy인 경우)

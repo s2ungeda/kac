@@ -11,10 +11,10 @@
 #include <atomic>
 #include <functional>
 #include <queue>
-#include <mutex>
 #include <variant>
 #include "arbitrage/common/types.hpp"
 #include "arbitrage/common/lockfree_queue.hpp"
+#include "arbitrage/common/spin_wait.hpp"
 #include "arbitrage/common/logger.hpp"
 
 namespace beast = boost::beast;
@@ -87,14 +87,31 @@ public:
     // 이벤트 큐 (Lock-Free, 메인 스레드에서 폴링)
     LockFreeQueue<WebSocketEvent>& event_queue() { return event_queue_; }
     
-    // 통계
+    // 통계 (atomic 기반 lock-free)
     struct Stats {
-        uint64_t messages_received{0};
-        uint64_t bytes_received{0};
-        uint64_t reconnect_count{0};
+        std::atomic<uint64_t> messages_received{0};
+        std::atomic<uint64_t> bytes_received{0};
+        std::atomic<uint64_t> reconnect_count{0};
         std::chrono::steady_clock::time_point connected_at;
+
+        // 복사용 스냅샷
+        struct Snapshot {
+            uint64_t messages_received{0};
+            uint64_t bytes_received{0};
+            uint64_t reconnect_count{0};
+            std::chrono::steady_clock::time_point connected_at;
+        };
+
+        Snapshot snapshot() const {
+            return {
+                messages_received.load(std::memory_order_relaxed),
+                bytes_received.load(std::memory_order_relaxed),
+                reconnect_count.load(std::memory_order_relaxed),
+                connected_at
+            };
+        }
     };
-    Stats get_stats() const;
+    Stats::Snapshot get_stats() const;
     
 protected:
     // 파생 클래스에서 구현
@@ -152,14 +169,13 @@ private:
     EventCallback event_callback_;
     LockFreeQueue<WebSocketEvent> event_queue_{4096};
     
-    // Write queue (thread-safe가 필요하므로 mutex 사용)
+    // Write queue (SpinLock 사용 - Lock-Free 호환)
     std::queue<std::string> write_queue_;
-    std::mutex write_mutex_;
+    mutable SpinLock write_lock_;
     bool writing_{false};
-    
-    // 통계
+
+    // 통계 (atomic 기반, mutex 불필요)
     Stats stats_;
-    mutable std::mutex stats_mutex_;
 };
 
 }  // namespace arbitrage
