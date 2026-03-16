@@ -6,8 +6,8 @@
 ---
 
 ## 📅 마지막 업데이트
-- 날짜: 2026-03-12
-- 세션: #15
+- 날짜: 2026-03-16
+- 세션: #17
 
 ---
 
@@ -35,14 +35,23 @@
 | 18 | Symbol Master | 2026-03-12 | ✅ 빌드 성공 | 심볼 변환, 수량 정규화, XRP 기본값 |
 | 19 | Event Bus | 2026-03-12 | ✅ 테스트 통과 | Pub/Sub, 타입 안전 구독, 비동기 처리 |
 | 20 | Thread Manager | 2026-03-12 | ✅ 테스트 통과 | 어피니티, 우선순위, NUMA, 시스템 토폴로지 |
+| 21 | Graceful Shutdown | 2026-03-16 | ✅ 테스트 통과 | ShutdownManager, 시그널 핸들러, 우선순위 종료 |
+| 22 | Health Check | 2026-03-16 | ✅ 테스트 통과 | HealthChecker, CPU/메모리 모니터링, 콜백 알림 |
+| 23 | TCP Server | 2026-03-16 | ✅ 테스트 통과 | epoll 기반, 바이너리 프로토콜, 인증, 브로드캐스트 |
+| 24 | Alert System | 2026-03-16 | ✅ 테스트 통과 | Telegram/Discord/Slack, Rate Limit, 레벨 필터링 |
+| 25 | Daily Loss Limit | 2026-03-16 | ✅ 테스트 통과 | 손익 추적, 킬스위치, 자정 리셋, 경고/위험 콜백 |
+| 26 | Watchdog | 2026-03-16 | ✅ 테스트 통과 | 프로세스 감시, 하트비트, IPC, 상태 영속화 |
+| 27 | CLI Tool | 2026-03-16 | ✅ 테스트 통과 | TCP 클라이언트, 상태 조회, 킬스위치, 포맷팅 |
+| 28 | Trading Stats | 2026-03-16 | ✅ 테스트 통과 | 일/주/월/전체 통계, 샤프 비율, 드로다운 |
+| 29 | Integration Test | 2026-03-16 | ✅ 테스트 통과 | 통합 테스트, 성능 검증 |
 
 ---
 
 ## 🔄 진행 중인 태스크
 
-### 현재: 없음
+### 현재: 없음 - 🎉 모든 태스크 완료!
 
-다음 태스크: TASK_21 (HTTP Server) - Phase 6 시작
+모든 29개 태스크가 완료되었습니다.
 
 ---
 
@@ -282,6 +291,195 @@
   - thread_manager_test.cpp: 48개 테스트 모두 통과
 - Phase 5 (인프라) 100% 완료!
 
+### 세션 #16 (2026-03-16)
+- TASK_21 Graceful Shutdown 완료
+  - ShutdownManager 클래스 구현 (include/arbitrage/infra/shutdown.hpp)
+    - ShutdownPhase enum: Running, Initiated, Stopping, Completed, Timeout
+    - ShutdownPriority 네임스페이스: Network, Order, Transfer, Strategy, Storage, Logging
+    - ShutdownComponent struct: 이름, 콜백, 우선순위, 타임아웃
+    - ShutdownResult struct: 종료 결과 (완료/타임아웃/실패 컴포넌트)
+  - 주요 기능
+    - install_signal_handlers(): SIGINT/SIGTERM/SIGHUP 핸들러 등록
+    - register_component(): 컴포넌트 등록 (우선순위, 타임아웃 지정)
+    - initiate_shutdown(): 종료 시작 (비동기)
+    - wait_for_shutdown(): 종료 대기 (타임아웃 지원)
+    - force_shutdown(): 강제 종료
+  - 종료 순서
+    - 우선순위 기반 순차 종료 (낮은 숫자 먼저)
+    - 컴포넌트별 타임아웃 처리
+    - EventBus 연동 (SystemShutdown 이벤트 발행)
+  - ShutdownGuard RAII 클래스: 자동 등록/해제
+  - shutdown_test 예제 프로그램 (38개 테스트 모두 통과)
+- Phase 6 (서버) 17% 완료 (1/6)
+- TASK_22 Health Check 완료
+  - HealthChecker 클래스 구현 (include/arbitrage/infra/health_check.hpp)
+    - HealthStatus enum: Healthy, Degraded, Unhealthy
+    - ComponentHealth struct: 컴포넌트 상태 정보
+    - ResourceUsage struct: CPU/메모리/FD 사용량
+    - SystemHealth struct: 전체 시스템 상태
+    - HealthCheckerConfig: 체크 주기, 임계값 설정
+  - 주요 기능
+    - register_check(): 컴포넌트 체크 함수 등록
+    - check_all(): 전체 시스템 상태 조회
+    - check_component(): 개별 컴포넌트 상태 조회
+    - start_periodic_check(): 주기적 자동 체크
+    - on_unhealthy(), on_degraded(): 상태 알림 콜백
+    - set_event_bus(): EventBus 연동 (KillSwitch 이벤트)
+  - 리소스 모니터링 (Linux)
+    - /proc/self/stat 파싱으로 CPU 사용률 측정
+    - /proc/self/status 파싱으로 메모리 사용량 측정
+    - /proc/self/fd 디렉토리로 열린 FD 수 측정
+  - 편의 함수
+    - make_simple_check(): 간단한 bool 기반 체크 함수 생성
+    - make_conditional_check(): 조건부 상태 체크 함수 생성
+    - HealthCheckGuard: RAII 자동 등록/해제
+  - health_check_test 예제 프로그램 (31개 테스트 모두 통과)
+- Phase 6 (서버) 33% 완료 (2/6)
+- TASK_23 TCP Server 완료
+  - TcpServer 클래스 구현 (include/arbitrage/infra/tcp_server.hpp)
+    - MessageType enum: 20+ 메시지 타입 (Ping, Auth, Ticker, Order, System 등)
+    - MessageHeader: 8바이트 고정 헤더 (magic + version + type + length)
+    - Message: 헤더 + 페이로드 직렬화/역직렬화
+    - ClientInfo: 클라이언트 상태 및 통계
+    - TcpServerConfig: 포트, 인증, 타임아웃 설정
+  - 주요 기능
+    - epoll 기반 비동기 I/O (Linux)
+    - 다중 클라이언트 지원 (max_clients 설정)
+    - 바이너리 프로토콜 (0x4B 0x41 "KA" magic)
+    - 인증 시스템 (AuthRequest/AuthResponse)
+    - Ping/Pong 자동 응답
+    - broadcast(): 인증된 클라이언트에 브로드캐스트
+    - send_message(): 특정 클라이언트에 메시지 전송
+    - on_message(), on_client_connected/disconnected 콜백
+  - 편의 함수
+    - make_json_payload(): 간단한 JSON 문자열 생성
+    - make_json_payload_num(): 숫자 포함 JSON 생성
+  - tcp_server_test 예제 프로그램 (17개 테스트 모두 통과)
+- Phase 6 (서버) 50% 완료 (3/6)
+- TASK_24 Alert System 완료
+  - AlertService 클래스 구현 (include/arbitrage/ops/alert.hpp)
+    - AlertLevel enum: Info, Warning, Error, Critical
+    - Alert struct: 알림 데이터 (타이틀, 메시지, 소스, 메타데이터)
+    - TelegramConfig, DiscordConfig, SlackConfig: 채널별 설정
+    - AlertRateLimitConfig: Rate Limit 설정
+  - 주요 기능
+    - send(), send_sync(): 알림 전송 (비동기/동기)
+    - info(), warning(), error(), critical(): 편의 메서드
+    - send_telegram(): Telegram Bot API 연동
+    - send_discord(): Discord Webhook 연동
+    - send_slack(): Slack Webhook 연동
+    - check_rate_limit(): 분당 제한 및 동일 알림 쿨다운
+  - 포맷팅 지원
+    - format_telegram(): HTML 포맷
+    - format_discord(): Embed JSON 포맷
+    - format_text(): 간단한 텍스트 포맷
+  - alert_test 예제 프로그램 (22개 테스트 모두 통과)
+- Phase 6 (서버) 67% 완료 (4/6)
+- TASK_25 Daily Loss Limit 완료
+  - DailyLossLimiter 클래스 구현 (include/arbitrage/ops/daily_limit.hpp)
+    - DailyStats struct: 손익 통계 (realized/unrealized, win/loss count, drawdown)
+    - TradeRecord struct: 개별 거래 기록
+    - DailyLimitConfig: 한도, 경고 임계값, 리셋 설정
+  - 주요 기능
+    - record_trade(): 거래 손익 기록
+    - remaining_limit(): 남은 한도 조회
+    - usage_percent(): 한도 사용률
+    - is_limit_reached(): 한도 도달 여부
+    - on_warning(), on_critical(): 경고/위험 콜백
+    - set_kill_switch(): 킬스위치 콜백 설정
+    - reset(): 수동 리셋
+    - start(): 자정 자동 리셋 타이머 시작
+  - 통계 기능
+    - win_rate(): 승률 계산
+    - max_drawdown: 최대 손실폭 추적
+    - largest_win/loss: 최대 수익/손실 거래
+    - get_trade_history(): 거래 기록 조회
+  - EventBus 연동: DailyLossLimitReached, KillSwitchActivated 이벤트
+  - daily_limit_test 예제 프로그램 (24개 테스트 모두 통과)
+- Phase 6 (서버) 83% 완료 (5/6)
+- TASK_26 Watchdog 완료
+  - WatchdogClient 클래스 구현 (include/arbitrage/infra/watchdog_client.hpp)
+    - Heartbeat struct: 하트비트 데이터 (시퀀스, 타임스탬프, 상태)
+    - ComponentBit 네임스페이스: 컴포넌트 비트 상수
+    - WatchdogCommand enum: 워치독 명령 (Shutdown, SaveState, KillSwitch 등)
+    - WatchdogClientConfig: 클라이언트 설정
+  - 주요 기능
+    - connect(): Unix Domain Socket 연결
+    - start_heartbeat(): 자동 하트비트 전송
+    - update_status(): 상태 업데이트
+    - on_command(): 명령 수신 콜백
+    - set_component_ok(): 컴포넌트 상태 설정
+  - Watchdog 클래스 구현 (include/arbitrage/infra/watchdog.hpp)
+    - ProcessStatus struct: 프로세스 상태 정보
+    - PersistedState struct: 영속화 상태 (포지션, 주문, 통계)
+    - WatchdogConfig: 감시 설정 (하트비트, 재시작, 리소스 한도)
+    - RestartEvent struct: 재시작 이벤트 기록
+  - 주요 기능
+    - launch_main_process(): 프로세스 시작 (fork/exec)
+    - restart_main_process(): 자동 재시작 (제한 포함)
+    - handle_heartbeat(): 하트비트 처리
+    - save_state() / load_latest_state(): 상태 영속화
+    - check_heartbeat(): 하트비트 타임아웃 감지
+    - check_resources(): 리소스 사용량 체크 (/proc 파싱)
+  - EventBus 연동: HeartbeatReceived, ProcessRestarted, WatchdogAlert 이벤트
+  - watchdog_test 예제 프로그램 (32개 테스트 모두 통과)
+- Phase 6 (서버) 100% 완료!
+- TASK_27 CLI Tool 완료
+  - CLI 클래스 구현 (tools/cli/commands.hpp)
+    - CLIConfig struct: 서버 주소, 포트, 타임아웃, 인증 토큰
+    - SystemStatusResponse, PremiumResponse, BalanceResponse 등 응답 구조체
+    - CLI 클래스: TCP 서버 연동 명령줄 도구
+  - 주요 기능
+    - connect(): TCP 서버 연결 (Unix 소켓)
+    - status(), premium(), balance(), history(), health(): 조회 명령
+    - order(), cancel(): 주문 명령
+    - kill(), resume(): 킬스위치 제어
+    - start_strategy(), stop_strategy(): 전략 제어
+    - config_set(), config_get(): 설정 관리
+  - 출력 헬퍼
+    - print_status(), print_premium(), print_balance() 등
+    - ANSI 컬러 지원 (green, red, yellow, bold)
+    - format_number(), format_krw(), format_percent()
+  - arbitrage-cli 실행 파일 (tools/cli/main.cpp)
+    - 명령줄 인자 파싱 (--host, --port, --token, --verbose)
+    - 모든 명령어 지원
+  - cli_test 예제 프로그램 (31개 테스트 모두 통과)
+- Phase 7 (모니터링) 67% 완료 (2/3)
+- TASK_28 Trading Stats 완료
+  - TradingStats 구조체 (include/arbitrage/ops/trading_stats.hpp)
+    - 승률, 손익비, 샤프 비율, 드로다운 분석
+    - 일별 수익률 기반 샤프 비율 (연환산)
+    - Calmar Ratio, Recovery Factor
+  - TradingStatsTracker 클래스
+    - 일/주/월/연/전체 기간 통계
+    - 거래 기록 관리 (ExtendedTradeRecord)
+    - 연속 승패 추적
+    - 파일 기반 저장/로드 (CSV)
+  - DailySummary: 일별/월별 요약
+  - trading_stats_test (37개 테스트 모두 통과)
+
+### 세션 #17 (2026-03-16)
+- TASK_29 Integration Test 완료
+  - IntegrationTestRunner 클래스 구현 (tests/integration/integration_test.hpp)
+    - TestResult, TestSummary, TestCategory: 테스트 결과 구조체
+    - TestCategory enum: Connectivity, DataFeed, Premium, Strategy, DryRun, Infrastructure, Performance
+    - IntegrationTestConfig: 테스트 설정 (타임아웃, 성능 기준 등)
+    - ProgressCallback: 테스트 진행 콜백
+  - 구현된 테스트 (tests/integration/integration_test.cpp)
+    - SPSCQueueLatency: Lock-free 큐 성능 테스트 (<1μs)
+    - MemoryPoolPerf: 오브젝트 풀 성능 테스트 (<1μs)
+    - JSONParserThroughput: JSON 파싱 성능 테스트 (>10K ops/s)
+    - EventBusBasic: EventBus 통합 테스트 (Pub/Sub)
+    - DualOrderValidation: 양방향 주문 타입 검증
+    - RecoveryActions: 거래소 상수 및 KRW 거래소 확인
+  - 테스트 실행 CLI (tests/integration/main.cpp)
+    - 카테고리별 실행: all, connectivity, datafeed, premium, strategy, dryrun, infra, performance
+    - 옵션: --verbose, --stop-on-fail, --skip-slow
+  - ⚠️ Mock/Stub 사용 금지 원칙 준수
+  - integration_test (6개 테스트 모두 통과)
+- Phase 7 (모니터링) 100% 완료!
+- 🎉 프로젝트 전체 완료!
+
 ### 세션 #12 (2026-01-27)
 - TASK_10 OrderBook Analyzer 완료
   - LiquidityMetrics 유동성 측정 (include/arbitrage/strategy/liquidity_metrics.hpp)
@@ -515,18 +713,12 @@
 
 ## 📌 다음 세션에서 할 일
 
-1. Phase 5 계속 - 인프라
-   - TASK_17: Multi Account (다중 계정 지원)
-   - TASK_18: Symbol Master (심볼 매핑)
-   - TASK_19: Event Bus (이벤트 버스)
+🎉 **모든 태스크 완료!**
 
-2. Phase 6 - 서버
-   - TASK_21: HTTP Server (모니터링 API)
-   - TASK_22: WebSocket Server (실시간 데이터)
-
-3. 추가 저지연 최적화 (선택)
-   - SIMD 가속 (simdjson 적용)
-   - CPU Affinity (스레드 코어 고정)
+다음 단계:
+1. 실제 거래소 API 연결 테스트
+2. 실거래 모드 검증
+3. 성능 튜닝 및 최적화
 
 ---
 
@@ -536,7 +728,7 @@
 - 컴파일러: g++ 9.4.0
 - CMake: 3.16.3
 - 빌드 상태: ✅ 성공
-- 테스트 상태: ✅ lowlatency_test, rate_limiter_test, executor_test, transfer_test 통과
+- 테스트 상태: ✅ lowlatency_test, rate_limiter_test, executor_test, transfer_test, event_bus_test, thread_manager_test, shutdown_test, health_check_test, tcp_server_test, alert_test, daily_limit_test, watchdog_test, cli_test, trading_stats_test, integration_test 통과
 
 ---
 
@@ -548,10 +740,10 @@ Phase 2 (성능):     ✅✅ 2/2 ✔️ 완료!
 Phase 3 (거래):     ✅✅ 2/2 ✔️ 완료!
 Phase 4 (전략):     ✅✅✅✅✅ 5/5 ✔️ 완료!
 Phase 5 (인프라):   ✅✅✅✅✅✅ 6/6 ✔️ 완료!
-Phase 6 (서버):     ⬜⬜⬜⬜⬜⬜ 0/6
-Phase 7 (모니터링): ⬜⬜⬜ 0/3
+Phase 6 (서버):     ✅✅✅✅✅✅ 6/6 ✔️ 완료!
+Phase 7 (모니터링): ✅✅✅ 3/3 ✔️ 완료!
 
-총 진행률: 20/29 (69.0%)
+총 진행률: 29/29 (100%) 🎉
 ```
 
 > ⚠️ 실행 순서는 TASK_ORDER.md 참조

@@ -50,9 +50,21 @@ add_library(executor
     executor/transfer.cpp
 )
 
-# Infra 라이브러리 (TASK_19)
+# Infra 라이브러리 (TASK_19, TASK_21, TASK_22, TASK_23, TASK_26)
 add_library(infra
     infra/event_bus.cpp
+    infra/shutdown.cpp
+    infra/health_check.cpp
+    infra/tcp_server.cpp
+    infra/watchdog_client.cpp
+    infra/watchdog.cpp
+)
+
+# Ops 라이브러리 (TASK_24, TASK_25, TASK_28)
+add_library(ops
+    ops/alert.cpp
+    ops/daily_limit.cpp
+    ops/trading_stats.cpp
 )
 
 # 공통 라이브러리 링크
@@ -133,6 +145,14 @@ target_link_libraries(executor
 target_link_libraries(infra
     PUBLIC
         common
+        Threads::Threads
+)
+
+# Ops 라이브러리 링크 (TASK_24)
+target_link_libraries(ops
+    PUBLIC
+        common
+        infra
         Threads::Threads
 )
 

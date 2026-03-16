@@ -237,3 +237,89 @@ target_link_libraries(thread_manager_test
         common
         Threads::Threads
 )
+
+# Shutdown Manager Test (TASK_21)
+add_executable(shutdown_test shutdown_test.cpp)
+
+target_link_libraries(shutdown_test
+    PRIVATE
+        common
+        infra
+        Threads::Threads
+)
+
+# Health Check Test (TASK_22)
+add_executable(health_check_test health_check_test.cpp)
+
+target_link_libraries(health_check_test
+    PRIVATE
+        common
+        infra
+        Threads::Threads
+)
+
+# TCP Server Test (TASK_23)
+add_executable(tcp_server_test tcp_server_test.cpp)
+
+target_link_libraries(tcp_server_test
+    PRIVATE
+        common
+        infra
+        Threads::Threads
+)
+
+# Alert System Test (TASK_24)
+add_executable(alert_test alert_test.cpp)
+
+target_link_libraries(alert_test
+    PRIVATE
+        common
+        infra
+        ops
+        Threads::Threads
+)
+
+# Daily Loss Limit Test (TASK_25)
+add_executable(daily_limit_test daily_limit_test.cpp)
+
+target_link_libraries(daily_limit_test
+    PRIVATE
+        common
+        infra
+        ops
+        Threads::Threads
+)
+
+# Watchdog Test (TASK_26)
+add_executable(watchdog_test watchdog_test.cpp)
+
+target_link_libraries(watchdog_test
+    PRIVATE
+        common
+        infra
+        Threads::Threads
+)
+
+# CLI Test (TASK_27)
+add_executable(cli_test cli_test.cpp ${CMAKE_SOURCE_DIR}/tools/cli/commands.cpp)
+
+target_include_directories(cli_test
+    PRIVATE
+        ${CMAKE_SOURCE_DIR}/tools/cli
+)
+
+target_link_libraries(cli_test
+    PRIVATE
+        Threads::Threads
+)
+
+# Trading Stats Test (TASK_28)
+add_executable(trading_stats_test trading_stats_test.cpp)
+
+target_link_libraries(trading_stats_test
+    PRIVATE
+        common
+        infra
+        ops
+        Threads::Threads
+)

@@ -31,6 +31,7 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 # 서브디렉토리
 add_subdirectory(src)
 add_subdirectory(examples)
+add_subdirectory(tools/cli)
 if(BUILD_TESTING)
     enable_testing()
     add_subdirectory(tests)

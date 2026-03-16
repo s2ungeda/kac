@@ -1,0 +1,527 @@
+#pragma once
+
+/**
+ * Watchdog Service (TASK_26)
+ *
+ * 메인 프로세스 감시 및 장애 복구
+ * - 하트비트 모니터링
+ * - 자동 재시작
+ * - 상태 영속화
+ * - 리소스 모니터링
+ */
+
+#include "arbitrage/infra/watchdog_client.hpp"
+
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+namespace arbitrage {
+
+// Forward declarations
+class EventBus;
+class AlertService;
+
+// =============================================================================
+// 프로세스 상태
+// =============================================================================
+
+/**
+ * 프로세스 상태
+ */
+struct ProcessStatus {
+    int pid{-1};
+    bool is_running{false};
+    uint64_t memory_bytes{0};
+    double cpu_percent{0.0};
+    uint64_t uptime_sec{0};
+    int exit_code{0};
+    std::string exit_reason;
+    std::chrono::system_clock::time_point start_time;
+
+    ProcessStatus() = default;
+};
+
+// =============================================================================
+// 상태 영속화
+// =============================================================================
+
+/**
+ * 저장할 상태 (크래시 복구용)
+ */
+struct PersistedState {
+    uint64_t version{1};
+    std::chrono::system_clock::time_point saved_at;
+
+    // 포지션 정보
+    struct Position {
+        std::string exchange;
+        std::string symbol;
+        double quantity{0.0};
+        double avg_price{0.0};
+        std::string side;  // "long" / "short"
+    };
+    std::vector<Position> open_positions;
+
+    // 대기 중인 주문
+    struct PendingOrder {
+        std::string order_id;
+        std::string exchange;
+        std::string symbol;
+        double quantity{0.0};
+        double price{0.0};
+        std::string side;
+        std::string type;  // "limit" / "market"
+        std::chrono::system_clock::time_point created_at;
+    };
+    std::vector<PendingOrder> pending_orders;
+
+    // 통계
+    double total_pnl_today{0.0};
+    int total_trades_today{0};
+    double daily_loss_used{0.0};
+
+    // 시스템 상태
+    bool kill_switch_active{false};
+    std::string last_error;
+};
+
+// =============================================================================
+// 워치독 설정
+// =============================================================================
+
+/**
+ * 워치독 설정
+ */
+struct WatchdogConfig {
+    // 메인 프로세스 설정
+    std::string main_executable{"./arbitrage"};
+    std::vector<std::string> main_arguments;
+    std::string working_directory{"./"};
+
+    // 하트비트 설정
+    int heartbeat_interval_ms{1000};        // 1초
+    int heartbeat_timeout_ms{5000};         // 5초 무응답 시 이상
+    int max_missed_heartbeats{3};           // 3회 연속 실패 시 재시작
+
+    // 재시작 설정
+    int max_restarts{10};                   // 최대 재시작 횟수
+    int restart_window_sec{3600};           // 1시간 내 재시작 횟수 제한
+    int restart_delay_ms{5000};             // 재시작 전 대기
+    bool restart_on_crash{true};
+    bool restart_on_hang{true};             // 하트비트 타임아웃 시
+
+    // 리소스 제한
+    uint64_t max_memory_bytes{4ULL * 1024 * 1024 * 1024};  // 4GB
+    double max_cpu_percent{90.0};
+    int resource_check_interval_ms{10000};  // 10초
+
+    // 상태 저장
+    std::string state_directory{"./state"};
+    int state_save_interval_ms{5000};       // 5초
+
+    // 알림
+    bool alert_on_restart{true};
+    bool alert_on_resource_limit{true};
+
+    // IPC 설정
+    std::string socket_path{WATCHDOG_SOCKET_PATH};
+};
+
+// =============================================================================
+// 재시작 기록
+// =============================================================================
+
+/**
+ * 재시작 이벤트
+ */
+struct RestartEvent {
+    std::chrono::system_clock::time_point timestamp;
+    int old_pid{0};
+    int new_pid{0};
+    std::string reason;
+    int exit_code{0};
+};
+
+// =============================================================================
+// Watchdog
+// =============================================================================
+
+/**
+ * 워치독 서비스
+ *
+ * 메인 프로세스를 감시하고 장애 시 복구
+ */
+class Watchdog {
+public:
+    using RestartCallback = std::function<void(int old_pid, int new_pid, const std::string& reason)>;
+    using AlertCallback = std::function<void(const std::string& level, const std::string& message)>;
+    using HeartbeatCallback = std::function<void(const Heartbeat& hb)>;
+
+    /**
+     * 싱글톤 인스턴스
+     */
+    static Watchdog& instance();
+
+    Watchdog();
+    explicit Watchdog(const WatchdogConfig& config);
+    ~Watchdog();
+
+    Watchdog(const Watchdog&) = delete;
+    Watchdog& operator=(const Watchdog&) = delete;
+
+    // =========================================================================
+    // 서비스 제어
+    // =========================================================================
+
+    /**
+     * 워치독 시작
+     */
+    void start();
+
+    /**
+     * 워치독 중지
+     */
+    void stop();
+
+    /**
+     * 실행 중인지 확인
+     */
+    bool is_running() const {
+        return running_.load(std::memory_order_acquire);
+    }
+
+    // =========================================================================
+    // 프로세스 제어
+    // =========================================================================
+
+    /**
+     * 메인 프로세스 시작
+     */
+    int launch_main_process();
+
+    /**
+     * 메인 프로세스 재시작
+     */
+    void restart_main_process(const std::string& reason);
+
+    /**
+     * 메인 프로세스 종료 요청
+     */
+    void request_shutdown();
+
+    /**
+     * 메인 프로세스 강제 종료
+     */
+    void force_kill();
+
+    /**
+     * 메인 프로세스 실행 중인지 확인
+     */
+    bool is_main_process_running() const;
+
+    /**
+     * 메인 프로세스 PID
+     */
+    int main_process_pid() const {
+        return main_pid_.load(std::memory_order_acquire);
+    }
+
+    // =========================================================================
+    // 명령 전송
+    // =========================================================================
+
+    /**
+     * 명령 전송
+     */
+    void send_command(WatchdogCommand cmd, const std::string& payload = "");
+
+    /**
+     * 상태 저장 요청
+     */
+    void trigger_state_save();
+
+    /**
+     * 킬스위치 활성화
+     */
+    void activate_kill_switch(const std::string& reason);
+
+    // =========================================================================
+    // 하트비트 처리 (수동)
+    // =========================================================================
+
+    /**
+     * 하트비트 처리 (외부에서 호출)
+     */
+    void handle_heartbeat(const Heartbeat& hb);
+
+    /**
+     * 마지막 하트비트 정보
+     */
+    Heartbeat last_heartbeat() const;
+
+    /**
+     * 마지막 하트비트 이후 경과 시간 (ms)
+     */
+    int64_t ms_since_last_heartbeat() const;
+
+    // =========================================================================
+    // 상태 조회
+    // =========================================================================
+
+    /**
+     * 현재 상태
+     */
+    struct Status {
+        bool running{false};
+        bool main_process_running{false};
+        int main_process_pid{-1};
+        uint64_t main_process_uptime_sec{0};
+        int restart_count{0};
+        int missed_heartbeat_count{0};
+        std::chrono::system_clock::time_point last_heartbeat;
+        std::chrono::system_clock::time_point last_restart;
+        Heartbeat last_heartbeat_data;
+    };
+
+    Status get_status() const;
+
+    /**
+     * 재시작 횟수
+     */
+    int restart_count() const {
+        return restart_count_.load(std::memory_order_relaxed);
+    }
+
+    /**
+     * 누락된 하트비트 횟수
+     */
+    int missed_heartbeat_count() const {
+        return missed_heartbeat_count_.load(std::memory_order_relaxed);
+    }
+
+    /**
+     * 재시작 히스토리
+     */
+    std::vector<RestartEvent> get_restart_history() const;
+
+    // =========================================================================
+    // 상태 영속화
+    // =========================================================================
+
+    /**
+     * 상태 저장
+     */
+    void save_state(const PersistedState& state);
+
+    /**
+     * 상태 로드
+     */
+    std::optional<PersistedState> load_latest_state();
+
+    /**
+     * 스냅샷 목록
+     */
+    std::vector<std::string> list_state_snapshots(int max_count = 10);
+
+    /**
+     * 오래된 스냅샷 정리
+     */
+    void cleanup_old_snapshots(int keep_count = 100);
+
+    // =========================================================================
+    // 콜백 설정
+    // =========================================================================
+
+    /**
+     * 재시작 콜백
+     */
+    void on_restart(RestartCallback callback);
+
+    /**
+     * 알림 콜백
+     */
+    void on_alert(AlertCallback callback);
+
+    /**
+     * 하트비트 수신 콜백
+     */
+    void on_heartbeat(HeartbeatCallback callback);
+
+    /**
+     * EventBus 연결
+     */
+    void set_event_bus(std::shared_ptr<EventBus> bus);
+
+    /**
+     * AlertService 연결
+     */
+    void set_alert_service(std::shared_ptr<AlertService> service);
+
+    // =========================================================================
+    // 설정
+    // =========================================================================
+
+    /**
+     * 설정 업데이트
+     */
+    void set_config(const WatchdogConfig& config);
+
+    /**
+     * 현재 설정
+     */
+    WatchdogConfig config() const;
+
+private:
+    /**
+     * 모니터 스레드
+     */
+    void monitor_loop();
+
+    /**
+     * 하트비트 체크
+     */
+    void check_heartbeat();
+
+    /**
+     * 리소스 체크
+     */
+    void check_resources();
+
+    /**
+     * 프로세스 종료 대기
+     */
+    bool wait_for_exit(int timeout_ms);
+
+    /**
+     * 재시작 실행
+     */
+    void do_restart(const std::string& reason);
+
+    /**
+     * 재시작 제한 체크
+     */
+    bool can_restart() const;
+
+    /**
+     * 알림 발송
+     */
+    void send_alert(const std::string& level, const std::string& message);
+
+    /**
+     * 프로세스 시작
+     */
+    int do_launch();
+
+    /**
+     * 프로세스 상태 조회
+     */
+    ProcessStatus get_process_status(int pid) const;
+
+    /**
+     * IPC 서버 시작
+     */
+    void start_ipc_server();
+
+    /**
+     * IPC 서버 중지
+     */
+    void stop_ipc_server();
+
+    /**
+     * 상태 파일 경로 생성
+     */
+    std::string generate_state_filename() const;
+
+    /**
+     * 상태 직렬화/역직렬화
+     */
+    std::vector<uint8_t> serialize_state(const PersistedState& state);
+    PersistedState deserialize_state(const std::vector<uint8_t>& data);
+
+private:
+    WatchdogConfig config_;
+
+    // 상태
+    std::atomic<bool> running_{false};
+    std::atomic<int> main_pid_{-1};
+    std::atomic<int> restart_count_{0};
+    std::atomic<int> missed_heartbeat_count_{0};
+
+    // 스레드
+    std::thread monitor_thread_;
+    std::thread ipc_thread_;
+    std::condition_variable cv_;
+    std::mutex cv_mutex_;
+
+    // 하트비트 추적
+    mutable std::mutex heartbeat_mutex_;
+    Heartbeat last_heartbeat_;
+    std::chrono::steady_clock::time_point last_heartbeat_time_;
+
+    // 재시작 추적
+    mutable std::mutex restart_mutex_;
+    std::chrono::steady_clock::time_point window_start_;
+    std::deque<RestartEvent> restart_history_;
+
+    // 프로세스 시작 시간
+    std::chrono::system_clock::time_point process_start_time_;
+
+    // 콜백
+    std::mutex callbacks_mutex_;
+    std::vector<RestartCallback> restart_callbacks_;
+    std::vector<AlertCallback> alert_callbacks_;
+    std::vector<HeartbeatCallback> heartbeat_callbacks_;
+    std::weak_ptr<EventBus> event_bus_;
+    std::weak_ptr<AlertService> alert_service_;
+
+    // IPC 서버
+    int ipc_socket_fd_{-1};
+    std::atomic<bool> ipc_running_{false};
+};
+
+// =============================================================================
+// 글로벌 접근자
+// =============================================================================
+
+/**
+ * Watchdog 싱글톤 접근
+ */
+inline Watchdog& watchdog() {
+    return Watchdog::instance();
+}
+
+// =============================================================================
+// 편의 함수
+// =============================================================================
+
+/**
+ * 워치독에서 메인 프로세스 감시 시작
+ */
+inline void start_watchdog(const WatchdogConfig& config = {}) {
+    watchdog().set_config(config);
+    watchdog().start();
+}
+
+/**
+ * 워치독 중지
+ */
+inline void stop_watchdog() {
+    watchdog().stop();
+}
+
+/**
+ * 메인 프로세스 재시작 요청
+ */
+inline void request_restart(const std::string& reason = "Manual request") {
+    watchdog().restart_main_process(reason);
+}
+
+}  // namespace arbitrage

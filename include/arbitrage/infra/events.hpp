@@ -309,6 +309,41 @@ struct SystemShutdown : EventBase {
 };
 
 // =============================================================================
+// 워치독 이벤트 (TASK_26)
+// =============================================================================
+
+/**
+ * 하트비트 수신
+ */
+struct HeartbeatReceived : EventBase {
+    uint64_t sequence{0};
+    uint8_t component_status{0};
+
+    HeartbeatReceived() = default;
+};
+
+/**
+ * 프로세스 재시작
+ */
+struct ProcessRestarted : EventBase {
+    int old_pid{0};
+    int new_pid{0};
+    std::string reason;
+
+    ProcessRestarted() = default;
+};
+
+/**
+ * 워치독 알림
+ */
+struct WatchdogAlert : EventBase {
+    std::string level;
+    std::string message;
+
+    WatchdogAlert() = default;
+};
+
+// =============================================================================
 // 이벤트 통합 타입
 // =============================================================================
 using Event = std::variant<
@@ -344,7 +379,12 @@ using Event = std::variant<
     ConfigReloaded,
     DailyLossLimitReached,
     SystemStarted,
-    SystemShutdown
+    SystemShutdown,
+
+    // 워치독
+    HeartbeatReceived,
+    ProcessRestarted,
+    WatchdogAlert
 >;
 
 // =============================================================================
@@ -393,6 +433,9 @@ inline const char* get_event_type_name(const Event& event) {
         else if constexpr (std::is_same_v<T, DailyLossLimitReached>) return "DailyLossLimitReached";
         else if constexpr (std::is_same_v<T, SystemStarted>) return "SystemStarted";
         else if constexpr (std::is_same_v<T, SystemShutdown>) return "SystemShutdown";
+        else if constexpr (std::is_same_v<T, HeartbeatReceived>) return "HeartbeatReceived";
+        else if constexpr (std::is_same_v<T, ProcessRestarted>) return "ProcessRestarted";
+        else if constexpr (std::is_same_v<T, WatchdogAlert>) return "WatchdogAlert";
         else return "Unknown";
     }, event);
 }

@@ -42,7 +42,7 @@ struct WebSocketEvent {
     std::string error_message;
     
     // 생성자들
-    WebSocketEvent() = default;
+WebSocketEvent() = default;
     
     // Ticker 이벤트 생성자
     WebSocketEvent(Type t, Exchange ex, const Ticker& tick, const std::string& err = "")
