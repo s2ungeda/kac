@@ -32,10 +32,10 @@ private:
     void parse_ticker_v2(const nlohmann::json& json);
     void parse_orderbook_v2(const nlohmann::json& json);
 
-    // 구독 코드 (KRW-XRP 형식)
-    std::vector<std::string> ticker_codes_;
-    std::vector<std::string> orderbook_codes_;
-    std::vector<std::string> trade_codes_;
+    // 구독 코드 (KRW-XRP 형식, 고정 크기 배열)
+    SymbolList ticker_codes_;
+    SymbolList orderbook_codes_;
+    SymbolList trade_codes_;
 };
 
 }  // namespace arbitrage

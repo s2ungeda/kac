@@ -11,15 +11,15 @@ MEXCWebSocket::MEXCWebSocket(net::io_context& ioc, ssl::context& ctx)
 }
 
 void MEXCWebSocket::subscribe_ticker(const std::vector<std::string>& symbols) {
-    ticker_symbols_ = symbols;
+    ticker_symbols_.from_vector(symbols);
 }
 
 void MEXCWebSocket::subscribe_orderbook(const std::vector<std::string>& symbols) {
-    orderbook_symbols_ = symbols;
+    orderbook_symbols_.from_vector(symbols);
 }
 
 void MEXCWebSocket::subscribe_trade(const std::vector<std::string>& symbols) {
-    trade_symbols_ = symbols;
+    trade_symbols_.from_vector(symbols);
 }
 
 void MEXCWebSocket::on_connected() {
@@ -67,8 +67,8 @@ std::string MEXCWebSocket::convert_to_futures_symbol(const std::string& symbol) 
 
 void MEXCWebSocket::send_subscriptions() {
     // Ticker 구독
-    for (const auto& symbol : ticker_symbols_) {
-        std::string futures_symbol = convert_to_futures_symbol(symbol);
+    for (size_t i = 0; i < ticker_symbols_.size(); ++i) {
+        std::string futures_symbol = convert_to_futures_symbol(ticker_symbols_.get(i));
         nlohmann::json sub_msg = {
             {"method", "sub.ticker"},
             {"param", {{"symbol", futures_symbol}}}
@@ -78,8 +78,8 @@ void MEXCWebSocket::send_subscriptions() {
     }
 
     // Deal(Trade) 구독
-    for (const auto& symbol : trade_symbols_) {
-        std::string futures_symbol = convert_to_futures_symbol(symbol);
+    for (size_t i = 0; i < trade_symbols_.size(); ++i) {
+        std::string futures_symbol = convert_to_futures_symbol(trade_symbols_.get(i));
         nlohmann::json sub_msg = {
             {"method", "sub.deal"},
             {"param", {{"symbol", futures_symbol}}}
@@ -89,8 +89,8 @@ void MEXCWebSocket::send_subscriptions() {
     }
 
     // Orderbook(Depth) 구독
-    for (const auto& symbol : orderbook_symbols_) {
-        std::string futures_symbol = convert_to_futures_symbol(symbol);
+    for (size_t i = 0; i < orderbook_symbols_.size(); ++i) {
+        std::string futures_symbol = convert_to_futures_symbol(orderbook_symbols_.get(i));
         nlohmann::json sub_msg = {
             {"method", "sub.depth"},
             {"param", {{"symbol", futures_symbol}}}

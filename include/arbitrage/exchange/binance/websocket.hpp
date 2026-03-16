@@ -35,8 +35,8 @@ private:
     void parse_orderbook(const nlohmann::json& data, const std::string& stream_symbol = "");
     void parse_trade(const nlohmann::json& data);
     
-    // 스트림 목록
-    std::vector<std::string> streams_;
+    // 스트림 목록 (고정 크기 배열, Zero-Copy)
+    SymbolList streams_;
     int orderbook_depth_{10};
     
     // 구독 ID

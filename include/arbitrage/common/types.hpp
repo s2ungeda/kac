@@ -24,6 +24,44 @@ constexpr size_t MAX_SYMBOL_LEN = 16;   // "KRW-XRP", "XRPUSDT" 등
 constexpr size_t MAX_ORDER_ID_LEN = 48; // 주문 ID 최대 길이
 constexpr size_t MAX_MESSAGE_LEN = 128; // 에러 메시지 최대 길이
 constexpr size_t MAX_ORDERBOOK_DEPTH = 20; // 호가창 깊이
+constexpr size_t MAX_SYMBOLS = 32;      // 최대 구독 심볼 수
+
+// =============================================================================
+// 고정 크기 심볼 리스트 (std::vector<std::string> 대체)
+// =============================================================================
+struct SymbolList {
+    char symbols[MAX_SYMBOLS][MAX_SYMBOL_LEN]{};
+    size_t count{0};
+
+    void clear() { count = 0; }
+
+    bool add(const char* symbol) {
+        if (count >= MAX_SYMBOLS) return false;
+        std::strncpy(symbols[count], symbol, MAX_SYMBOL_LEN - 1);
+        symbols[count][MAX_SYMBOL_LEN - 1] = '\0';
+        count++;
+        return true;
+    }
+
+    bool add(const std::string& symbol) {
+        return add(symbol.c_str());
+    }
+
+    const char* get(size_t idx) const {
+        return (idx < count) ? symbols[idx] : nullptr;
+    }
+
+    size_t size() const { return count; }
+    bool empty() const { return count == 0; }
+
+    // std::vector<std::string>에서 변환
+    void from_vector(const std::vector<std::string>& vec) {
+        clear();
+        for (const auto& s : vec) {
+            if (!add(s)) break;
+        }
+    }
+};
 
 // 거래소 열거형
 enum class Exchange : uint8_t {

@@ -27,10 +27,10 @@ private:
     void parse_orderbook(const nlohmann::json& data);
     void parse_trade(const nlohmann::json& data);
     
-    // 구독 정보
-    std::vector<std::string> ticker_symbols_;
-    std::vector<std::string> orderbook_symbols_;
-    std::vector<std::string> trade_symbols_;
+    // 구독 정보 (고정 크기 배열, Zero-Copy)
+    SymbolList ticker_symbols_;
+    SymbolList orderbook_symbols_;
+    SymbolList trade_symbols_;
     
     // 티켓 ID (업비트 특유)
     std::string ticket_id_;

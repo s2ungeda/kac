@@ -35,52 +35,64 @@ UpbitWebSocket::UpbitWebSocket(net::io_context& ioc, ssl::context& ctx)
 }
 
 void UpbitWebSocket::subscribe_ticker(const std::vector<std::string>& symbols) {
-    ticker_symbols_ = symbols;
+    ticker_symbols_.from_vector(symbols);
 }
 
 void UpbitWebSocket::subscribe_orderbook(const std::vector<std::string>& symbols) {
-    orderbook_symbols_ = symbols;
+    orderbook_symbols_.from_vector(symbols);
 }
 
 void UpbitWebSocket::subscribe_trade(const std::vector<std::string>& symbols) {
-    trade_symbols_ = symbols;
+    trade_symbols_.from_vector(symbols);
 }
 
 std::string UpbitWebSocket::build_subscribe_message() {
     nlohmann::json messages = nlohmann::json::array();
-    
+
     // 티켓 메시지 (필수)
     messages.push_back({
         {"ticket", ticket_id_}
     });
-    
+
     // 시세 구독
     if (!ticker_symbols_.empty()) {
+        nlohmann::json codes = nlohmann::json::array();
+        for (size_t i = 0; i < ticker_symbols_.size(); ++i) {
+            codes.push_back(ticker_symbols_.get(i));
+        }
         messages.push_back({
             {"type", "ticker"},
-            {"codes", ticker_symbols_},
+            {"codes", codes},
             {"isOnlyRealtime", true}
         });
     }
-    
+
     // 호가 구독
     if (!orderbook_symbols_.empty()) {
+        nlohmann::json codes = nlohmann::json::array();
+        for (size_t i = 0; i < orderbook_symbols_.size(); ++i) {
+            codes.push_back(orderbook_symbols_.get(i));
+        }
         messages.push_back({
             {"type", "orderbook"},
-            {"codes", orderbook_symbols_},
+            {"codes", codes},
             {"isOnlyRealtime", true}
         });
     }
-    
+
     // 체결 구독
     if (!trade_symbols_.empty()) {
+        nlohmann::json codes = nlohmann::json::array();
+        for (size_t i = 0; i < trade_symbols_.size(); ++i) {
+            codes.push_back(trade_symbols_.get(i));
+        }
         messages.push_back({
             {"type", "trade"},
-            {"codes", trade_symbols_},
+            {"codes", codes},
             {"isOnlyRealtime", true}
         });
     }
-    
+
     return messages.dump();
 }
 

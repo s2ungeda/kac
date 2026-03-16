@@ -13,9 +13,9 @@ void BinanceWebSocket::subscribe_ticker(const std::vector<std::string>& symbols)
     for (const auto& symbol : symbols) {
         // 심볼을 소문자로 변환 (Binance는 소문자 사용)
         std::string lower_symbol = symbol;
-        std::transform(lower_symbol.begin(), lower_symbol.end(), 
+        std::transform(lower_symbol.begin(), lower_symbol.end(),
                       lower_symbol.begin(), ::tolower);
-        streams_.push_back(lower_symbol + "@ticker");
+        streams_.add((lower_symbol + "@ticker").c_str());
     }
 }
 
@@ -23,18 +23,18 @@ void BinanceWebSocket::subscribe_orderbook(const std::vector<std::string>& symbo
     orderbook_depth_ = depth;
     for (const auto& symbol : symbols) {
         std::string lower_symbol = symbol;
-        std::transform(lower_symbol.begin(), lower_symbol.end(), 
+        std::transform(lower_symbol.begin(), lower_symbol.end(),
                       lower_symbol.begin(), ::tolower);
-        streams_.push_back(lower_symbol + "@depth" + std::to_string(depth));
+        streams_.add((lower_symbol + "@depth" + std::to_string(depth)).c_str());
     }
 }
 
 void BinanceWebSocket::subscribe_trade(const std::vector<std::string>& symbols) {
     for (const auto& symbol : symbols) {
         std::string lower_symbol = symbol;
-        std::transform(lower_symbol.begin(), lower_symbol.end(), 
+        std::transform(lower_symbol.begin(), lower_symbol.end(),
                       lower_symbol.begin(), ::tolower);
-        streams_.push_back(lower_symbol + "@trade");
+        streams_.add((lower_symbol + "@trade").c_str());
     }
 }
 
@@ -45,10 +45,10 @@ void BinanceWebSocket::connect_with_streams() {
         target += "?streams=";
         for (size_t i = 0; i < streams_.size(); ++i) {
             if (i > 0) target += "/";
-            target += streams_[i];
+            target += streams_.get(i);
         }
     }
-    
+
     connect("stream.binance.com", "9443", target);
 }
 
@@ -57,14 +57,19 @@ std::string BinanceWebSocket::build_subscribe_message() {
     if (!streams_.empty()) {
         return "";
     }
-    
+
     // 개별 구독 메시지 (대안)
+    nlohmann::json params = nlohmann::json::array();
+    for (size_t i = 0; i < streams_.size(); ++i) {
+        params.push_back(streams_.get(i));
+    }
+
     nlohmann::json subscribe_msg = {
         {"method", "SUBSCRIBE"},
-        {"params", streams_},
+        {"params", params},
         {"id", subscribe_id_++}
     };
-    
+
     return subscribe_msg.dump();
 }
 

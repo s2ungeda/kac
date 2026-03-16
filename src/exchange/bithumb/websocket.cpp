@@ -13,19 +13,19 @@ BithumbWebSocket::BithumbWebSocket(net::io_context& ioc, ssl::context& ctx)
 void BithumbWebSocket::subscribe_ticker(const std::vector<std::string>& symbols) {
     // 심볼 형식 변환: XRP_KRW -> KRW-XRP
     for (const auto& sym : symbols) {
-        ticker_codes_.push_back(convert_to_v2_code(sym));
+        ticker_codes_.add(convert_to_v2_code(sym));
     }
 }
 
 void BithumbWebSocket::subscribe_orderbook(const std::vector<std::string>& symbols) {
     for (const auto& sym : symbols) {
-        orderbook_codes_.push_back(convert_to_v2_code(sym));
+        orderbook_codes_.add(convert_to_v2_code(sym));
     }
 }
 
 void BithumbWebSocket::subscribe_trade(const std::vector<std::string>& symbols) {
     for (const auto& sym : symbols) {
-        trade_codes_.push_back(convert_to_v2_code(sym));
+        trade_codes_.add(convert_to_v2_code(sym));
     }
 }
 
@@ -60,21 +60,33 @@ std::string BithumbWebSocket::build_subscribe_message() {
 
     // Type field - trade 우선
     if (!trade_codes_.empty()) {
+        nlohmann::json codes = nlohmann::json::array();
+        for (size_t i = 0; i < trade_codes_.size(); ++i) {
+            codes.push_back(trade_codes_.get(i));
+        }
         msg.push_back({
             {"type", "trade"},
-            {"codes", trade_codes_},
+            {"codes", codes},
             {"isOnlyRealtime", true}
         });
     } else if (!ticker_codes_.empty()) {
+        nlohmann::json codes = nlohmann::json::array();
+        for (size_t i = 0; i < ticker_codes_.size(); ++i) {
+            codes.push_back(ticker_codes_.get(i));
+        }
         msg.push_back({
             {"type", "ticker"},
-            {"codes", ticker_codes_},
+            {"codes", codes},
             {"isOnlyRealtime", true}
         });
     } else if (!orderbook_codes_.empty()) {
+        nlohmann::json codes = nlohmann::json::array();
+        for (size_t i = 0; i < orderbook_codes_.size(); ++i) {
+            codes.push_back(orderbook_codes_.get(i));
+        }
         msg.push_back({
             {"type", "orderbook"},
-            {"codes", orderbook_codes_},
+            {"codes", codes},
             {"isOnlyRealtime", true}
         });
     }

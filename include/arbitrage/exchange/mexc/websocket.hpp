@@ -38,10 +38,10 @@ private:
     void parse_depth(const nlohmann::json& json);
     void process_single_deal(const nlohmann::json& deal, const std::string& default_symbol);
 
-    // 구독 정보
-    std::vector<std::string> ticker_symbols_;
-    std::vector<std::string> orderbook_symbols_;
-    std::vector<std::string> trade_symbols_;
+    // 구독 정보 (고정 크기 배열, Zero-Copy)
+    SymbolList ticker_symbols_;
+    SymbolList orderbook_symbols_;
+    SymbolList trade_symbols_;
 
     // 구독 ID
     int subscribe_id_{1};
