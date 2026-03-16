@@ -66,3 +66,6 @@ core.*
 watchdog.pid
 watchdog.sock
 data/
+
+# IDE
+.vs/
