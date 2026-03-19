@@ -708,8 +708,12 @@ int main(int argc, char* argv[]) {
     }, ShutdownPriority::Network, std::chrono::seconds(5));
 
     shutdown_mgr.register_component("tcp_server", [&] {
-        if (tcp_server) tcp_server->stop();
-    }, ShutdownPriority::Network, std::chrono::seconds(3));
+        if (tcp_server) {
+            // TcpServer::stop()이 블로킹될 수 있으므로 detach 스레드에서 실행
+            std::thread([&] { tcp_server->stop(); }).detach();
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+    }, ShutdownPriority::Network, std::chrono::seconds(1));
 
     shutdown_mgr.register_component("watchdog", [&] {
         watchdog.stop_heartbeat();
@@ -725,8 +729,11 @@ int main(int argc, char* argv[]) {
     }
 
     shutdown_mgr.register_component("config_watcher", [&] {
-        if (config_watcher) config_watcher->stop();
-    }, ShutdownPriority::Strategy, std::chrono::seconds(2));
+        if (config_watcher) {
+            std::thread([&] { config_watcher->stop(); }).detach();
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+    }, ShutdownPriority::Strategy, std::chrono::seconds(1));
 
     shutdown_mgr.register_component("health_checker", [&] {
         health.stop();
@@ -742,12 +749,18 @@ int main(int argc, char* argv[]) {
     }, ShutdownPriority::Storage, std::chrono::seconds(3));
 
     shutdown_mgr.register_component("alert_service", [&] {
-        alerts.stop();
-    }, ShutdownPriority::Logging, std::chrono::seconds(3));
+        try {
+            std::thread([&] { alerts.stop(); }).detach();
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        } catch (...) {}
+    }, ShutdownPriority::Logging, std::chrono::seconds(1));
 
     shutdown_mgr.register_component("event_bus", [&] {
-        event_bus->stop();
-    }, ShutdownPriority::Logging, std::chrono::seconds(3));
+        try {
+            std::thread([&] { event_bus->stop(); }).detach();
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        } catch (...) {}
+    }, ShutdownPriority::Logging, std::chrono::seconds(1));
 
     shutdown_mgr.register_component("io_context", [&] {
         ioc.stop();
@@ -881,5 +894,8 @@ int main(int argc, char* argv[]) {
 
     Logger::shutdown();
     std::cout << "\nGoodbye!\n";
-    return 0;
+
+    // detach된 서비스 스레드(tcp_server, config_watcher 등)가
+    // 아직 종료 중일 수 있으므로 _exit()으로 즉시 종료
+    _exit(0);
 }
