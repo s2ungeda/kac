@@ -34,16 +34,16 @@ struct ExchangeConfig {
     bool enabled{false};
 };
 
-// 전략 설정
-struct StrategyConfig {
+// 전략 설정 (기본 설정 파일용 - 상세 설정은 decision_engine.hpp의 StrategyConfig)
+struct BasicStrategyConfig {
     double min_premium_pct{3.0};      // 최소 진입 김프
     double max_premium_pct{10.0};     // 최대 진입 김프
     double stop_loss_pct{1.0};        // 손절 기준
-    
+
     double min_order_qty{10.0};       // 최소 주문량 (XRP)
     double max_order_qty{10000.0};    // 최대 주문량
     double max_position{50000.0};     // 최대 포지션
-    
+
     double max_slippage_pct{0.5};     // 최대 슬리피지
     int order_timeout_ms{5000};       // 주문 타임아웃
 };
@@ -64,12 +64,12 @@ struct ServerConfig {
     std::string auth_token;
 };
 
-// 알림 설정
-struct AlertConfig {
+// 알림 설정 (기본 설정 파일용 - 상세 설정은 alert.hpp의 AlertConfig)
+struct BasicAlertConfig {
     bool telegram_enabled{false};
     std::string telegram_token;
     std::string telegram_chat_id;
-    
+
     bool discord_enabled{false};
     std::string discord_webhook;
 };
@@ -88,10 +88,10 @@ public:
     
     // Getter
     const ExchangeConfig& exchange(Exchange ex) const;
-    const StrategyConfig& strategy() const { return strategy_; }
+    const BasicStrategyConfig& strategy() const { return strategy_; }
     const RiskConfig& risk() const { return risk_; }
     const ServerConfig& server() const { return server_; }
-    const AlertConfig& alert() const { return alert_; }
+    const BasicAlertConfig& alert() const { return alert_; }
     
     // 심볼 관련
     const std::vector<SymbolConfig>& symbols() const { return symbols_; }
@@ -111,10 +111,10 @@ private:
     std::string config_path_;
     
     std::map<Exchange, ExchangeConfig> exchanges_;
-    StrategyConfig strategy_;
+    BasicStrategyConfig strategy_;
     RiskConfig risk_;
     ServerConfig server_;
-    AlertConfig alert_;
+    BasicAlertConfig alert_;
     
     // 심볼 목록
     std::vector<SymbolConfig> symbols_;          // 전체 심볼

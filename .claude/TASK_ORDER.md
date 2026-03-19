@@ -209,3 +209,54 @@ TASK_13_decision_engine.md    TASK_28_trading_stats.md
 TASK_14_strategy_plugin.md    TASK_29_integration_test.md
 TASK_15_config_hotreload.md
 ```
+
+---
+
+## Phase 8: 모듈 통합 - Hot/Cold Thread Architecture (6개)
+
+> Option A 변형: 단일 프로세스 내 Hot/Cold 스레드 분리
+> 결정일: 2026-03-19
+
+### 실행 순서
+
+```
+Phase 8 (통합): 30 → 31 → 32 → 35
+                30 → 33 ──┘
+                30 → 34 ──┘
+```
+
+| 순서 | 태스크 | 파일명 | 설명 | 예상 시간 |
+|:----:|--------|--------|------|:---------:|
+| 30 | **TASK_30** | cmake_fix_app_skeleton | CMake 수정 + App Skeleton | 2~3시간 |
+| 31 | **TASK_31** | hot_cold_threads | SPSC Bridge + Hot Thread | 2~3시간 |
+| 32 | **TASK_32** | order_execution_pipeline | Order Thread + Dry Run | 2~3시간 |
+| 33 | **TASK_33** | cold_services | Cold 서비스 7개 통합 | 3~4시간 |
+| 34 | **TASK_34** | utility_threads_shutdown | FX/Display Thread + Shutdown | 2시간 |
+| 35 | **TASK_35** | e2e_dry_run | End-to-End Dry Run 테스트 | 1~2시간 |
+
+### 의존성
+
+```
+TASK_30 (Skeleton)
+    ├── TASK_31 (Hot Thread) → TASK_32 (Order) ─┐
+    ├── TASK_33 (Cold Services) ────────────────┼── TASK_35 (E2E Test)
+    └── TASK_34 (Utility + Shutdown) ───────────┘
+```
+
+### 병렬 가능
+
+```
+TASK_31, 33, 34는 TASK_30 완료 후 병렬 진행 가능
+TASK_35는 모두 완료 후 실행
+```
+
+### 파일 목록
+
+```
+TASK_30_cmake_fix_app_skeleton.md
+TASK_31_hot_cold_threads.md
+TASK_32_order_execution_pipeline.md
+TASK_33_cold_services.md
+TASK_34_utility_threads_shutdown.md
+TASK_35_e2e_dry_run.md
+```

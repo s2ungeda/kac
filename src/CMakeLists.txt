@@ -167,6 +167,7 @@ target_link_libraries(arbitrage
         strategy
         executor
         infra
+        ops
         exchange_websocket
         exchange_order
         Threads::Threads

@@ -6,8 +6,8 @@
 ---
 
 ## 📅 마지막 업데이트
-- 날짜: 2026-03-16
-- 세션: #17
+- 날짜: 2026-03-19
+- 세션: #18
 
 ---
 
@@ -49,9 +49,16 @@
 
 ## 🔄 진행 중인 태스크
 
-### 현재: 없음 - 🎉 모든 태스크 완료!
+### 현재: Phase 8 - 모듈 통합 (Hot/Cold Thread Architecture)
 
-모든 29개 태스크가 완료되었습니다.
+| # | 태스크 | 상태 | 설명 |
+|---|--------|------|------|
+| 30 | CMake Fix + App Skeleton | ✅ 완료 | CMake ops 링크 + main.cpp 재작성 |
+| 31 | Hot/Cold Threads | ⬜ 대기 | SPSC Bridge + Hot Thread busy-poll |
+| 32 | Order Execution Pipeline | ⬜ 대기 | Order Thread + Dry Run |
+| 33 | Cold Services | ⬜ 대기 | 7개 Cold 서비스 EventBus 연결 |
+| 34 | Utility Threads + Shutdown | ⬜ 대기 | FX/Display Thread + Graceful Shutdown |
+| 35 | E2E Dry Run Test | ⬜ 대기 | 전체 파이프라인 검증 |
 
 ---
 
@@ -480,6 +487,24 @@
 - Phase 7 (모니터링) 100% 완료!
 - 🎉 프로젝트 전체 완료!
 
+### 세션 #18 (2026-03-19)
+- Option A/B/C 아키텍처 리팩토링 검토
+  - 업계 HFT 사례 조사 (Citadel, Jane Street, LMAX)
+  - 크립토 아비트라지 지연 특성 분석 (거래소 API 100ms+ 병목)
+  - **Option A 변형 채택**: 단일 프로세스 Hot/Cold 스레드 분리
+- Phase 8 태스크 문서 작성 (TASK_30 ~ TASK_35, 6개)
+- TASK_30 CMake Fix + App Skeleton 완료
+  - `ops` 라이브러리 링크 추가 (src/CMakeLists.txt)
+  - main.cpp 전체 재작성 (구조화된 Application Skeleton)
+    - ShutdownManager 시그널 처리
+    - EventBus async 이벤트 연결
+    - Cold 서비스 7개 초기화 (Health, DailyLimit, Alert, Stats, ConfigWatcher, TcpServer, Watchdog)
+    - Display/FX Rate 전용 스레드 분리
+    - 우선순위 기반 Graceful Shutdown 등록
+  - `config.hpp` StrategyConfig/AlertConfig 이름 충돌 해결
+    - → BasicStrategyConfig, BasicAlertConfig로 변경
+  - 전체 프로젝트 빌드 성공 (에러 0개)
+
 ### 세션 #12 (2026-01-27)
 - TASK_10 OrderBook Analyzer 완료
   - LiquidityMetrics 유동성 측정 (include/arbitrage/strategy/liquidity_metrics.hpp)
@@ -711,14 +736,13 @@
 
 ---
 
-## 📌 다음 세션에서 할 일
+## 📌 다음 할 일
 
-🎉 **모든 태스크 완료!**
-
-다음 단계:
-1. 실제 거래소 API 연결 테스트
-2. 실거래 모드 검증
-3. 성능 튜닝 및 최적화
+Phase 8 모듈 통합 진행:
+1. ~~TASK_30: CMake ops 링크 수정 + main.cpp Application Skeleton~~ ✅
+2. TASK_31: SPSC Bridge + Hot Thread ← 다음
+3. TASK_32~34: Order Thread, Cold Services, Shutdown (병렬 가능)
+4. TASK_35: E2E Dry Run 검증
 
 ---
 
@@ -743,7 +767,7 @@ Phase 5 (인프라):   ✅✅✅✅✅✅ 6/6 ✔️ 완료!
 Phase 6 (서버):     ✅✅✅✅✅✅ 6/6 ✔️ 완료!
 Phase 7 (모니터링): ✅✅✅ 3/3 ✔️ 완료!
 
-총 진행률: 29/29 (100%) 🎉
+총 진행률: 30/35 (86%) - Phase 8 통합 진행 중
 ```
 
 > ⚠️ 실행 순서는 TASK_ORDER.md 참조

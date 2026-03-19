@@ -1,7 +1,8 @@
 # 아키텍처 리팩토링 계획 (검토 중)
 
 > 작성일: 2026-03-16
-> 상태: 🔄 검토 중 (내일 결정 예정)
+> 결정일: 2026-03-19
+> 상태: ✅ Option A 변형 채택 — 단일 프로세스 Hot/Cold 스레드 분리
 
 ---
 
@@ -113,22 +114,24 @@
 
 ---
 
-## 🤔 결정 필요 사항
+## ✅ 결정 사항 (2026-03-19)
 
 1. **분리 범위**
-   - [ ] Option A: Feed Handler만 분리 (최소 변경)
-   - [ ] Option B: Feed + Order Manager 분리
-   - [ ] Option C: 전체 Hot/Cold 분리 (최대 변경)
+   - [x] **Option A 변형**: 단일 프로세스 내 Hot/Cold 스레드 분리
+   - 거래소 API 지연 100ms+가 병목 → 프로세스 분리 ROI 낮음
+   - 스레드 분리로 Hot/Cold 효과 동일 달성, 복잡도 최소
 
 2. **IPC 방식**
-   - [ ] Shared Memory + SPSC Queue
-   - [ ] Unix Domain Socket
-   - [ ] TCP (localhost)
+   - [x] **In-process SPSC Queue** (50~100ns)
+   - 프로세스 분리 없으므로 Shared Memory 불필요
 
-3. **우선순위**
-   - [ ] 안정성 우선 → 분리
-   - [ ] 속도 우선 → 현행 유지
-   - [ ] 균형 → 점진적 분리
+3. **접근 방식**
+   - [x] **점진적**: 모놀리식 완성 → 스레드 분리 → 필요 시 프로세스 분리
+   - 실측 데이터 기반 최적화
+
+### 구현 계획: TASK_30 ~ TASK_35 (6개 태스크)
+- 상세: `.claude/tasks/TASK_30_*.md` ~ `TASK_35_*.md`
+- 순서: `.claude/TASK_ORDER.md` Phase 8 섹션
 
 ---
 
@@ -147,13 +150,18 @@
 
 ---
 
-## 📅 다음 단계
+## 📅 실행 계획
 
-1. 위 결정 사항 검토
-2. 리팩토링 범위 확정
-3. 태스크 문서 작성 (TASK_30_*.md)
-4. 점진적 구현
+```
+TASK_30: CMake 수정 + App Skeleton        ← 시작점
+TASK_31: SPSC Bridge + Hot Thread
+TASK_32: Order Execution Pipeline
+TASK_33: Cold Services 7개 통합
+TASK_34: Utility Threads + Shutdown
+TASK_35: End-to-End Dry Run Test          ← 최종 검증
+```
 
----
-
-> 💡 이 문서는 검토용입니다. 최종 결정 후 수정됩니다.
+### 향후 (실거래 후 판단)
+- Feed Handler 프로세스 분리 (Option A 본안)
+- Cold Path 프로세스 분리 (Option C 부분 적용)
+- 실측 병목 기반 추가 최적화
