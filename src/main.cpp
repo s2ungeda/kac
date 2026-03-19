@@ -5,7 +5,7 @@
  * - Hot Thread: WebSocket → SPSC → Premium → Decision → Order Queue (TASK_31)
  * - Cold Threads: Logger, Alert, Stats, Health, Display, FX Rate
  *
- * Phase 8 통합: TASK_30 (Application Skeleton)
+ * Phase 8 통합: TASK_30 (Skeleton) + TASK_31 (Hot/Cold Threads)
  */
 
 // === Core ===
@@ -17,6 +17,7 @@
 #include "arbitrage/common/config_watcher.hpp"
 #include "arbitrage/common/lockfree_queue.hpp"
 #include "arbitrage/common/spin_wait.hpp"
+#include "arbitrage/common/thread_config.hpp"
 
 // === Strategy ===
 #include "arbitrage/strategy/premium_calc.hpp"
@@ -76,6 +77,10 @@ namespace defaults {
     constexpr int    MATRIX_INTERVAL_SEC   = 30;
     constexpr int    FX_UPDATE_INTERVAL_SEC = 30;
     constexpr int    STATS_INTERVAL_SEC    = 60;
+    constexpr size_t WS_QUEUE_CAPACITY     = 4096;   // Power of 2
+    constexpr size_t ORDER_QUEUE_CAPACITY  = 64;     // Power of 2
+    constexpr int    HOT_THREAD_CORE       = 1;      // 코어 1 고정
+    constexpr double MIN_EVALUATE_PREMIUM  = 0.1;    // 최소 평가 프리미엄 (%)
 }
 
 // =============================================================================
@@ -132,6 +137,188 @@ void print_matrix(const PremiumMatrix& matrix) {
         std::cout << "\n";
     }
     std::cout << "\n";
+}
+
+// =============================================================================
+// Hot Thread (Core-Pinned, Busy-Poll)
+// =============================================================================
+void hot_thread_func(
+    SPSCQueue<WebSocketEvent>& ws_queue,
+    PremiumCalculator& calculator,
+    DecisionEngine& engine,
+    SPSCQueue<DualOrderRequest>& order_queue,
+    std::shared_ptr<EventBus> event_bus,
+    std::atomic<double>& price_upbit,
+    std::atomic<double>& price_bithumb,
+    std::atomic<double>& price_binance,
+    std::atomic<double>& price_mexc,
+    std::shared_ptr<SimpleLogger> logger,
+    bool has_executor,
+    std::atomic<bool>& running
+) {
+    // 코어 고정 + RealTime 우선순위 적용
+    ThreadConfig hot_cfg;
+    hot_cfg.name = "hot_thread";
+    hot_cfg.core_id = defaults::HOT_THREAD_CORE;
+    hot_cfg.priority = ThreadPriority::High;  // RealTime은 root 필요, High로 대체
+    auto apply_result = ThreadManager::apply_to_current(hot_cfg);
+    if (apply_result) {
+        logger->info("Hot thread: core {} pinned, priority High", defaults::HOT_THREAD_CORE);
+    } else {
+        logger->warn("Hot thread: failed to apply config ({})", apply_result.error().message);
+    }
+
+    AdaptiveSpinWait waiter;
+    WebSocketEvent event;
+    uint64_t tick_count = 0;
+    uint64_t eval_count = 0;
+
+    while (running.load(std::memory_order_relaxed)) {
+        bool had_work = false;
+
+        // 1. SPSC Queue 드레인 — 모든 대기 이벤트 처리
+        while (ws_queue.pop(event)) {
+            had_work = true;
+
+            if (event.is_ticker() || event.is_trade()) {
+                double price = event.ticker().price;
+                Exchange ex = event.exchange;
+
+                // 2. 프리미엄 계산기 갱신
+                calculator.update_price(ex, price);
+
+                // Display 스레드용 atomic 갱신
+                switch (ex) {
+                    case Exchange::Upbit:   price_upbit.store(price, std::memory_order_relaxed); break;
+                    case Exchange::Bithumb: price_bithumb.store(price, std::memory_order_relaxed); break;
+                    case Exchange::Binance: price_binance.store(price, std::memory_order_relaxed); break;
+                    case Exchange::MEXC:    price_mexc.store(price, std::memory_order_relaxed); break;
+                    default: break;
+                }
+
+                tick_count++;
+            }
+        }
+
+        // 3. 기회 판단 (시세 업데이트가 있었을 때만)
+        if (had_work) {
+            auto best = calculator.get_best_opportunity();
+            if (best && best->premium_pct > defaults::MIN_EVALUATE_PREMIUM) {
+                auto decision = engine.evaluate(*best);
+                eval_count++;
+
+                if (decision.should_execute() && has_executor) {
+                    // 4. 주문 큐에 push (Order Thread가 소비 — TASK_32)
+                    order_queue.push(decision.order_request);
+
+                    // Cold path 이벤트 발행
+                    events::OpportunityDetected opp_evt;
+                    opp_evt.premium_pct = best->premium_pct;
+                    opp_evt.buy_exchange = best->buy_exchange;
+                    opp_evt.sell_exchange = best->sell_exchange;
+                    opp_evt.recommended_qty = decision.optimal_qty;
+                    opp_evt.expected_profit = decision.expected_profit_krw;
+                    opp_evt.confidence = decision.confidence;
+                    event_bus->publish(opp_evt);
+
+                    logger->info("ORDER QUEUED: {:.2f}% {} -> {} qty={:.1f}",
+                        best->premium_pct,
+                        exchange_name(best->buy_exchange),
+                        exchange_name(best->sell_exchange),
+                        decision.optimal_qty);
+                }
+            }
+        }
+
+        // 5. Adaptive spin: spin → yield → microsleep
+        if (!had_work) {
+            waiter.wait();
+        } else {
+            waiter.reset();
+        }
+    }
+
+    logger->info("Hot thread stopped: {} ticks, {} evaluations", tick_count, eval_count);
+}
+
+// =============================================================================
+// Order Thread (Cold Path — blocking REST API calls)
+// =============================================================================
+void order_thread_func(
+    SPSCQueue<DualOrderRequest>& order_queue,
+    DualOrderExecutor& executor,
+    DecisionEngine& engine,
+    DailyLossLimiter& daily_limit,
+    TradingStatsTracker& stats_tracker,
+    std::shared_ptr<EventBus> event_bus,
+    std::atomic<double>& current_fx_rate,
+    std::shared_ptr<SimpleLogger> logger,
+    std::atomic<bool>& running
+) {
+    // 코어 2 고정
+    ThreadConfig order_cfg;
+    order_cfg.name = "order_thread";
+    order_cfg.core_id = 2;
+    order_cfg.priority = ThreadPriority::High;
+    ThreadManager::apply_to_current(order_cfg);
+
+    AdaptiveSpinWait waiter;
+    DualOrderRequest request;
+    uint64_t order_count = 0;
+
+    while (running.load(std::memory_order_relaxed)) {
+        if (order_queue.pop(request)) {
+            waiter.reset();
+            order_count++;
+
+            // DualOrderStarted 이벤트
+            events::DualOrderStarted start_evt;
+            start_evt.buy_exchange = request.buy_order.exchange;
+            start_evt.sell_exchange = request.sell_order.exchange;
+            start_evt.quantity = request.buy_order.quantity;
+            event_bus->publish(start_evt);
+
+            logger->info("Executing dual order #{}: buy {} sell {}",
+                order_count,
+                exchange_name(request.buy_order.exchange),
+                exchange_name(request.sell_order.exchange));
+
+            // 주문 실행 (블로킹 — REST API 호출, 100ms+ 소요)
+            auto result = executor.execute_sync(request);
+
+            // 손익 계산
+            double fx_rate = current_fx_rate.load(std::memory_order_relaxed);
+            double profit = result.gross_profit(fx_rate);
+
+            // 결과 기록
+            engine.record_trade_result(profit);
+            daily_limit.record_trade(profit);
+            stats_tracker.record_trade(profit);
+
+            // DualOrderCompleted 이벤트
+            events::DualOrderCompleted complete_evt;
+            complete_evt.success = result.both_filled();
+            complete_evt.actual_profit = profit;
+            event_bus->publish(complete_evt);
+
+            if (result.both_filled()) {
+                logger->info("Dual order #{} filled: profit={:.0f} KRW",
+                    order_count, profit);
+                engine.start_cooldown(engine.config().cooldown_after_trade);
+            } else if (result.partial_fill()) {
+                logger->warn("Dual order #{} partial fill — recovery needed", order_count);
+                // RecoveryManager는 DualOrderExecutor 내부에서 auto_recovery가 처리
+                engine.start_cooldown(engine.config().cooldown_after_loss);
+            } else {
+                logger->error("Dual order #{} failed", order_count);
+                engine.start_cooldown(engine.config().cooldown_after_loss);
+            }
+        } else {
+            waiter.wait();
+        }
+    }
+
+    logger->info("Order thread stopped: {} orders executed", order_count);
 }
 
 // =============================================================================
@@ -367,8 +554,15 @@ int main(int argc, char* argv[]) {
         h.status = mexc_ws->is_connected() ? HealthStatus::Healthy : HealthStatus::Unhealthy;
         return h;
     });
+    health.register_check("decision_engine", [&]() -> ComponentHealth {
+        ComponentHealth h;
+        h.name = "decision_engine";
+        h.status = decision_engine.is_kill_switch_active()
+            ? HealthStatus::Degraded : HealthStatus::Healthy;
+        return h;
+    });
     health.set_event_bus(event_bus);
-    health.start_periodic_check(std::chrono::seconds(30));
+    // on_unhealthy는 AlertService 초기화 후 설정 (아래)
 
     // Daily Loss Limiter
     auto& daily_limit = daily_limiter();
@@ -399,8 +593,25 @@ int main(int argc, char* argv[]) {
                 " / Limit: " + std::to_string(static_cast<int>(e.limit)));
         });
 
+    // HealthChecker 콜백 (AlertService 초기화 후)
+    health.on_unhealthy([&](const ComponentHealth& ch) {
+        alerts.error("Health Check", ch.name + " is unhealthy");
+        logger->error("UNHEALTHY: {}", ch.name);
+    });
+    health.start_periodic_check(std::chrono::seconds(30));
+
+    event_bus->subscribe<events::ExchangeDisconnected>(
+        [&](const events::ExchangeDisconnected& e) {
+            alerts.error("Exchange Disconnected",
+                std::string(exchange_name(e.exchange)) + ": " + e.reason);
+        });
+
     // Trading Stats
     auto& stats = trading_stats();
+    event_bus->subscribe<events::DualOrderCompleted>(
+        [&](const events::DualOrderCompleted& e) {
+            stats.record_trade(e.actual_profit);
+        });
     stats.start();
 
     // Config Watcher
@@ -453,40 +664,34 @@ int main(int argc, char* argv[]) {
     }
 
     // =========================================================================
-    // 8. WebSocket 이벤트 핸들러
+    // 8. SPSC Queues + WebSocket → Hot Thread Bridge
     // =========================================================================
-    // TASK_31에서 SPSC Queue 기반으로 변경 예정
-    // 현재는 콜백 방식 유지
+    SPSCQueue<WebSocketEvent> ws_queue(defaults::WS_QUEUE_CAPACITY);
+    SPSCQueue<DualOrderRequest> order_queue(defaults::ORDER_QUEUE_CAPACITY);
 
-    upbit_ws->on_event([&](const WebSocketEvent& evt) {
+    // WebSocket 콜백: IO 스레드에서 SPSC Queue로 push (fire-and-forget)
+    // IO 스레드는 단일 스레드(io_context) → SPSC Producer 조건 충족
+    upbit_ws->on_event([&ws_queue](const WebSocketEvent& evt) {
         if (evt.is_ticker() || evt.is_trade()) {
-            double price = evt.ticker().price;
-            price_upbit.store(price, std::memory_order_relaxed);
-            calculator.update_price(Exchange::Upbit, price);
+            ws_queue.push(evt);
         }
     });
 
-    binance_ws->on_event([&](const WebSocketEvent& evt) {
+    binance_ws->on_event([&ws_queue](const WebSocketEvent& evt) {
         if (evt.is_ticker() || evt.is_trade()) {
-            double price = evt.ticker().price;
-            price_binance.store(price, std::memory_order_relaxed);
-            calculator.update_price(Exchange::Binance, price);
+            ws_queue.push(evt);
         }
     });
 
-    bithumb_ws->on_event([&](const WebSocketEvent& evt) {
+    bithumb_ws->on_event([&ws_queue](const WebSocketEvent& evt) {
         if (evt.is_ticker() || evt.is_trade()) {
-            double price = evt.ticker().price;
-            price_bithumb.store(price, std::memory_order_relaxed);
-            calculator.update_price(Exchange::Bithumb, price);
+            ws_queue.push(evt);
         }
     });
 
-    mexc_ws->on_event([&](const WebSocketEvent& evt) {
+    mexc_ws->on_event([&ws_queue](const WebSocketEvent& evt) {
         if (evt.is_ticker() || evt.is_trade()) {
-            double price = evt.ticker().price;
-            price_mexc.store(price, std::memory_order_relaxed);
-            calculator.update_price(Exchange::MEXC, price);
+            ws_queue.push(evt);
         }
     });
 
@@ -513,7 +718,9 @@ int main(int argc, char* argv[]) {
 
     if (dual_executor) {
         shutdown_mgr.register_component("order_executor", [&] {
-            // 진행 중인 주문 완료 대기 (나중에 TASK_32에서 Order Thread join 추가)
+            // running=false는 websockets shutdown에서 이미 설정됨
+            // order_thread는 main에서 join
+            logger->info("Order executor: draining queue...");
         }, ShutdownPriority::Order, std::chrono::seconds(10));
     }
 
@@ -576,9 +783,30 @@ int main(int argc, char* argv[]) {
     // =========================================================================
     // 11. 스레드 시작
     // =========================================================================
+    bool has_executor = (dual_executor != nullptr);
 
     // IO Thread (Boost.Asio)
     std::thread io_thread([&ioc]() { ioc.run(); });
+
+    // Hot Thread (Core-Pinned, Busy-Poll)
+    std::thread hot_thread(hot_thread_func,
+        std::ref(ws_queue), std::ref(calculator),
+        std::ref(decision_engine), std::ref(order_queue),
+        event_bus,
+        std::ref(price_upbit), std::ref(price_bithumb),
+        std::ref(price_binance), std::ref(price_mexc),
+        logger, has_executor, std::ref(running));
+
+    // Order Thread (Cold — only if executor is available)
+    std::thread order_thread;
+    if (has_executor) {
+        order_thread = std::thread(order_thread_func,
+            std::ref(order_queue), std::ref(*dual_executor),
+            std::ref(decision_engine), std::ref(daily_limit),
+            std::ref(stats), event_bus,
+            std::ref(current_fx_rate), logger, std::ref(running));
+        logger->info("Order thread started");
+    }
 
     // Display Thread (Cold)
     std::thread display_thread(display_thread_func,
@@ -614,6 +842,8 @@ int main(int argc, char* argv[]) {
     running.store(false, std::memory_order_relaxed);
     cv_shutdown.notify_all();
 
+    if (hot_thread.joinable()) hot_thread.join();
+    if (order_thread.joinable()) order_thread.join();
     if (fx_thread.joinable()) fx_thread.join();
     if (display_thread.joinable()) display_thread.join();
     if (io_thread.joinable()) io_thread.join();

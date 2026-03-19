@@ -54,10 +54,10 @@
 | # | 태스크 | 상태 | 설명 |
 |---|--------|------|------|
 | 30 | CMake Fix + App Skeleton | ✅ 완료 | CMake ops 링크 + main.cpp 재작성 |
-| 31 | Hot/Cold Threads | ⬜ 대기 | SPSC Bridge + Hot Thread busy-poll |
-| 32 | Order Execution Pipeline | ⬜ 대기 | Order Thread + Dry Run |
-| 33 | Cold Services | ⬜ 대기 | 7개 Cold 서비스 EventBus 연결 |
-| 34 | Utility Threads + Shutdown | ⬜ 대기 | FX/Display Thread + Graceful Shutdown |
+| 31 | Hot/Cold Threads | ✅ 완료 | SPSC Bridge + Hot Thread busy-poll |
+| 32 | Order Execution Pipeline | ✅ 완료 | Order Thread + Dry Run |
+| 33 | Cold Services | ✅ 완료 | 7개 Cold 서비스 EventBus 연결 |
+| 34 | Utility Threads + Shutdown | ✅ 완료 | FX/Display Thread + Graceful Shutdown |
 | 35 | E2E Dry Run Test | ⬜ 대기 | 전체 파이프라인 검증 |
 
 ---
@@ -738,11 +738,13 @@
 
 ## 📌 다음 할 일
 
-Phase 8 모듈 통합 진행:
-1. ~~TASK_30: CMake ops 링크 수정 + main.cpp Application Skeleton~~ ✅
-2. TASK_31: SPSC Bridge + Hot Thread ← 다음
-3. TASK_32~34: Order Thread, Cold Services, Shutdown (병렬 가능)
-4. TASK_35: E2E Dry Run 검증
+Phase 8 모듈 통합:
+1. ~~TASK_30: CMake + App Skeleton~~ ✅
+2. ~~TASK_31: SPSC Bridge + Hot Thread~~ ✅
+3. ~~TASK_32: Order Execution Pipeline~~ ✅
+4. ~~TASK_33: Cold Services~~ ✅
+5. ~~TASK_34: Utility Threads + Shutdown~~ ✅
+6. TASK_35: E2E Dry Run 검증 ← 다음
 
 ---
 
@@ -767,7 +769,7 @@ Phase 5 (인프라):   ✅✅✅✅✅✅ 6/6 ✔️ 완료!
 Phase 6 (서버):     ✅✅✅✅✅✅ 6/6 ✔️ 완료!
 Phase 7 (모니터링): ✅✅✅ 3/3 ✔️ 완료!
 
-총 진행률: 30/35 (86%) - Phase 8 통합 진행 중
+총 진행률: 34/35 (97%) - TASK_35 (E2E Dry Run) 대기
 ```
 
 > ⚠️ 실행 순서는 TASK_ORDER.md 참조
