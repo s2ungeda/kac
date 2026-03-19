@@ -487,6 +487,43 @@
 - Phase 7 (모니터링) 100% 완료!
 - 🎉 프로젝트 전체 완료!
 
+### 세션 #19 (2026-03-19)
+- Phase 9/10 설계 완료
+  - Phase 9: Feed Handler 프로세스 분리 (TASK_36~41, 6개, ~6일)
+    - ShmSPSCQueue: shm_open+mmap, Ticker(64B POD), ~256KB/queue
+    - FeederProcess: 거래소별 독립 프로세스
+    - arb-engine --standalone/--engine 모드 분기
+  - Phase 10: Cold Path 프로세스 분리 (TASK_42~49, 8개, ~9.5일)
+    - Unix Domain Socket IPC (cold path용)
+    - order-manager, risk-manager, monitor 3개 프로세스
+    - Watchdog 8프로세스 오케스트레이션
+  - 14개 태스크 문서 작성 (TASK_36~49)
+  - TASK_ORDER.md Phase 9/10 섹션 추가
+
+### 세션 #19 (2026-03-19) — TASK_31~35
+- TASK_31 Hot/Cold Threads 완료
+  - SPSCQueue<WebSocketEvent>(4096) — IO→Hot Thread 브릿지
+  - WebSocket 콜백 → ws_queue.push() (fire-and-forget)
+  - Hot Thread busy-poll + AdaptiveSpinWait, 코어 1 고정
+  - DecisionEngine.evaluate() 실시간 호출
+- TASK_32 Order Execution Pipeline 완료
+  - order_thread_func — SPSCQueue<DualOrderRequest> 드레인
+  - DualOrderExecutor.execute_sync() (코어 2 고정)
+  - 결과 기록: DecisionEngine, DailyLossLimiter, TradingStats
+  - DualOrderStarted/DualOrderCompleted 이벤트 발행
+- TASK_33 Cold Services 완료
+  - HealthChecker: decision_engine 체크 + on_unhealthy 콜백
+  - EventBus 구독: ExchangeDisconnected, DualOrderCompleted
+  - TradingStats 자동 기록
+- TASK_34 Utility Threads + Shutdown — TASK_30에서 구현 확인
+- TASK_35 E2E Dry Run Test 완료
+  - 4개 거래소 WebSocket 연결 성공
+  - Hot Thread: 41 ticks, 29 evaluations (10초 기준)
+  - Graceful Shutdown: 10개 컴포넌트, 860ms, exit code 0
+  - TcpServer/ConfigWatcher/AlertService stop() 블로킹 우회 (detach)
+  - _exit(0)으로 종료 시 terminate 방지
+- 커밋: 192ef02, 푸시 완료
+
 ### 세션 #18 (2026-03-19)
 - Option A/B/C 아키텍처 리팩토링 검토
   - 업계 HFT 사례 조사 (Citadel, Jane Street, LMAX)
@@ -747,10 +784,15 @@ Phase 8 모듈 통합:
 6. ~~TASK_35: E2E Dry Run 검증~~ ✅
 
 🎉 **Phase 8 모듈 통합 완료!**
-- 4개 거래소 실시간 데이터 수신
-- Hot/Cold Thread 아키텍처 동작
-- Graceful Shutdown (860ms, 10개 컴포넌트)
-- Exit code 0
+
+### 다음 세션에서 할 일
+
+1. **TASK_36 (ShmSPSCQueue)** 부터 시작
+   - `include/arbitrage/ipc/shm_queue.hpp` 작성
+   - `shm_open() + mmap()` 기반 크로스 프로세스 SPSC Queue
+   - fork() 테스트로 검증
+2. Phase 9 순서: 36 → 37 → 38 → 39 → 40 → 41
+3. TASK_42 (Unix Socket)는 Phase 9와 병렬 진행 가능
 
 ---
 

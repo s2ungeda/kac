@@ -260,3 +260,121 @@ TASK_33_cold_services.md
 TASK_34_utility_threads_shutdown.md
 TASK_35_e2e_dry_run.md
 ```
+
+---
+
+## Phase 9: Feed Handler 프로세스 분리 (6개)
+
+> Option A 본안: 거래소별 Feeder → Shared Memory → arb-engine
+
+### 실행 순서
+
+```
+Phase 9: 36 → 37 → 38 → 39 → 40 → 41
+         36 ──────────────┘
+```
+
+| 순서 | 태스크 | 파일명 | 설명 | 예상 |
+|:----:|--------|--------|------|:----:|
+| 36 | **TASK_36** | shm_spsc_queue | SHM SPSC Queue + ShmManager | 1.5일 |
+| 37 | **TASK_37** | feeder_process | FeederProcess 기반 클래스 | 1일 |
+| 38 | **TASK_38** | feeder_executables | 4개 Feeder 실행 파일 | 0.5일 |
+| 39 | **TASK_39** | engine_shm_consumer | arb-engine SHM 소비자 | 1일 |
+| 40 | **TASK_40** | watchdog_multiprocess | Watchdog 다중 프로세스 | 1일 |
+| 41 | **TASK_41** | phase2_integration | Phase 2 통합 테스트 | 1일 |
+
+### 의존성
+
+```
+TASK_36 (ShmSPSCQueue)
+    ├── TASK_37 (FeederProcess) → TASK_38 (4 Feeders)
+    │                                     ↓
+    └──────────────────────────→ TASK_39 (Engine SHM)
+                                          ↓
+                                 TASK_40 (Watchdog)
+                                          ↓
+                                 TASK_41 (Integration Test)
+```
+
+### 아키텍처
+
+```
+upbit-feeder   ──SHM──┐
+bithumb-feeder ──SHM──┤
+binance-feeder ──SHM──┼──> arb-engine (Hot Thread)
+mexc-feeder    ──SHM──┘
+
+IPC: shm_open() + mmap(), ~256KB per queue
+지연: ~100-200ns (in-process 대비 +100ns)
+```
+
+---
+
+## Phase 10: Cold Path 프로세스 분리 (8개)
+
+> 주문/리스크/모니터링을 독립 프로세스로 분리
+
+### 실행 순서
+
+```
+Phase 10: 42 ──→ 44 ──→ 47 → 48 → 49
+          42 ──→ 45 ──┘
+          42 ──→ 46 ──┘
+          36 → 43 → 44
+```
+
+| 순서 | 태스크 | 파일명 | 설명 | 예상 |
+|:----:|--------|--------|------|:----:|
+| 42 | **TASK_42** | unix_socket_ipc | Unix Domain Socket IPC | 1.5일 |
+| 43 | **TASK_43** | shm_order_types | SHM Order POD 타입 | 0.5일 |
+| 44 | **TASK_44** | order_manager_process | Order Manager 프로세스 | 1.5일 |
+| 45 | **TASK_45** | risk_manager_process | Risk Manager 프로세스 | 1일 |
+| 46 | **TASK_46** | monitor_process | Monitor 프로세스 | 1.5일 |
+| 47 | **TASK_47** | engine_cold_removal | Engine Cold Path 제거 | 1.5일 |
+| 48 | **TASK_48** | watchdog_full | Watchdog 8 프로세스 | 1일 |
+| 49 | **TASK_49** | phase3_integration | Phase 3 통합 테스트 | 1일 |
+
+### 의존성
+
+```
+TASK_42 (Unix Socket) ──→ TASK_44 (OrderManager) ──┐
+         │               TASK_45 (RiskManager)  ──┼→ TASK_47 (Engine 경량화)
+         └──────────────→ TASK_46 (Monitor)     ──┘          ↓
+                                                    TASK_48 (Watchdog 8프로세스)
+TASK_36 → TASK_43 (POD Types) → TASK_44                      ↓
+                                                    TASK_49 (Integration Test)
+```
+
+### 병렬 가능
+
+```
+TASK_42 (Unix Socket)은 Phase 2와 병렬 진행 가능
+TASK_44, 45, 46은 TASK_42 완료 후 병렬 진행 가능
+```
+
+### 최종 아키텍처 (8 프로세스)
+
+```
+┌─ HOT PATH ─────────────────────────────────────┐
+│ upbit-feeder ──SHM──┐                          │
+│ bithumb-feeder ─SHM─┤                          │
+│ binance-feeder ─SHM─┼→ arb-engine ──SHM──→ ···│
+│ mexc-feeder ──SHM───┘      ↑                   │
+└────────────────────────────┼────────────────────┘
+                             │ Unix Socket
+┌─ COLD PATH ───────────────┼────────────────────┐
+│ order-manager ←─SHM───────┘                    │
+│ risk-manager  ←─UDS── order-manager             │
+│ monitor       ←─UDS── all processes             │
+└─────────────────────────────────────────────────┘
+
+Watchdog: 8개 프로세스 감시/재시작
+```
+
+### 총 예상 기간
+
+| Phase | 태스크 | 예상 |
+|-------|:------:|:----:|
+| Phase 9 (Feed Handler) | 6개 | ~6일 |
+| Phase 10 (Cold Path) | 8개 | ~9.5일 |
+| **합계** | **14개** | **~15.5일** |
