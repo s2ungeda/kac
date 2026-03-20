@@ -60,6 +60,12 @@ add_library(infra
     infra/watchdog.cpp
 )
 
+# IPC 라이브러리 (TASK_36: Shared Memory SPSC Queue)
+add_subdirectory(ipc)
+
+# Feeder 라이브러리 (TASK_37: FeederProcess)
+add_subdirectory(feeder)
+
 # Ops 라이브러리 (TASK_24, TASK_25, TASK_28)
 add_library(ops
     ops/alert.cpp

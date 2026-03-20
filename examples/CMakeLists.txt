@@ -323,3 +323,37 @@ target_link_libraries(trading_stats_test
         ops
         Threads::Threads
 )
+
+# SHM SPSC Queue Test (TASK_36)
+add_executable(shm_queue_test shm_queue_test.cpp)
+
+target_link_libraries(shm_queue_test
+    PRIVATE
+        common
+        ipc
+        Threads::Threads
+        rt
+)
+
+# Feeder Process Test (TASK_37)
+add_executable(feeder_test feeder_test.cpp)
+
+target_link_libraries(feeder_test
+    PRIVATE
+        common
+        ipc
+        feeder
+        exchange_websocket
+        Threads::Threads
+        rt
+)
+
+# Boost 링크
+if(Boost_FOUND)
+    target_link_libraries(feeder_test PRIVATE ${Boost_LIBRARIES})
+endif()
+
+# OpenSSL 링크
+if(OpenSSL_FOUND)
+    target_link_libraries(feeder_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+endif()

@@ -6,8 +6,8 @@
 ---
 
 ## 📅 마지막 업데이트
-- 날짜: 2026-03-19
-- 세션: #18
+- 날짜: 2026-03-20
+- 세션: #20
 
 ---
 
@@ -49,16 +49,16 @@
 
 ## 🔄 진행 중인 태스크
 
-### 현재: Phase 8 - 모듈 통합 (Hot/Cold Thread Architecture)
+### 현재: Phase 9 - Feed Handler 프로세스 분리
 
 | # | 태스크 | 상태 | 설명 |
 |---|--------|------|------|
-| 30 | CMake Fix + App Skeleton | ✅ 완료 | CMake ops 링크 + main.cpp 재작성 |
-| 31 | Hot/Cold Threads | ✅ 완료 | SPSC Bridge + Hot Thread busy-poll |
-| 32 | Order Execution Pipeline | ✅ 완료 | Order Thread + Dry Run |
-| 33 | Cold Services | ✅ 완료 | 7개 Cold 서비스 EventBus 연결 |
-| 34 | Utility Threads + Shutdown | ✅ 완료 | FX/Display Thread + Graceful Shutdown |
-| 35 | E2E Dry Run Test | ✅ 완료 | 전체 파이프라인 검증 |
+| 36 | ShmSPSCQueue | ✅ 완료 | SHM SPSC Queue + ShmSegment RAII |
+| 37 | FeederProcess | ✅ 완료 | FeederProcess 기반 클래스 + CLI |
+| 38 | Feeder Executables | ⬜ 대기 | 4개 Feeder 실행 파일 |
+| 39 | Engine SHM Consumer | ⬜ 대기 | arb-engine SHM 소비자 |
+| 40 | Watchdog Multiprocess | ⬜ 대기 | Watchdog 다중 프로세스 |
+| 41 | Phase 2 Integration | ⬜ 대기 | Phase 2 통합 테스트 |
 
 ---
 
@@ -487,6 +487,37 @@
 - Phase 7 (모니터링) 100% 완료!
 - 🎉 프로젝트 전체 완료!
 
+### 세션 #20 (2026-03-20)
+- TASK_37 FeederProcess 완료
+  - include/arbitrage/feeder/feeder_process.hpp: FeederProcess, FeederConfig, FeederStats
+  - src/feeder/feeder_process.cpp: 구현
+    - 거래소별 기본값 자동 적용 (WS host/target, SHM name, symbol)
+    - WebSocket 클라이언트 생성/구독 (4개 거래소)
+    - on_event → SHM push (Ticker POD)
+    - SIGINT/SIGTERM 시그널 핸들러
+    - 10초 주기 통계 로깅
+    - CLI 파서 (--exchange, --shm, --capacity, --symbol 등)
+  - src/feeder/CMakeLists.txt: feeder 라이브러리
+  - feeder_test: 43개 테스트 모두 통과
+    - CLI 파서 14개, fork IPC, stop, stats, SHM 이름 자동할당, Ticker variety
+- TASK_36 ShmSPSCQueue 완료
+  - include/arbitrage/ipc/ipc_types.hpp: ShmQueueHeader(64B), ShmAtomicIndex(64B), SHM 이름 상수
+  - include/arbitrage/ipc/shm_manager.hpp + src/ipc/shm_manager.cpp: ShmSegment RAII (shm_open+mmap+munmap+unlink)
+  - include/arbitrage/ipc/shm_queue.hpp: ShmSPSCQueue<T> Lock-Free 크로스 프로세스 SPSC Queue
+    - init_producer() / attach_consumer() 팩토리
+    - push/pop (memcpy, trivially_copyable)
+    - close(), is_closed(), is_producer_alive()
+    - magic/version/element_size 유효성 검증
+  - src/ipc/CMakeLists.txt: ipc 라이브러리 (librt 링크)
+  - shm_queue_test: 54개 테스트 모두 통과
+    - static_assert(trivially_copyable, lock-free)
+    - ShmSegment 생성/해제/이동
+    - Push/Pop, Full, Empty, Close, 대량 순서검증
+    - Invalid magic/element_size 거부
+    - fork() 부모→자식 IPC 검증 (100개 아이템)
+    - 벤치마크: 81ns/op (12.3M ops/sec)
+  - Ticker(64B) × 4096 = ~256KB per queue
+
 ### 세션 #19 (2026-03-19)
 - Phase 9/10 설계 완료
   - Phase 9: Feed Handler 프로세스 분리 (TASK_36~41, 6개, ~6일)
@@ -775,24 +806,14 @@
 
 ## 📌 다음 할 일
 
-Phase 8 모듈 통합:
-1. ~~TASK_30: CMake + App Skeleton~~ ✅
-2. ~~TASK_31: SPSC Bridge + Hot Thread~~ ✅
-3. ~~TASK_32: Order Execution Pipeline~~ ✅
-4. ~~TASK_33: Cold Services~~ ✅
-5. ~~TASK_34: Utility Threads + Shutdown~~ ✅
-6. ~~TASK_35: E2E Dry Run 검증~~ ✅
-
-🎉 **Phase 8 모듈 통합 완료!**
-
-### 다음 세션에서 할 일
-
-1. **TASK_36 (ShmSPSCQueue)** 부터 시작
-   - `include/arbitrage/ipc/shm_queue.hpp` 작성
-   - `shm_open() + mmap()` 기반 크로스 프로세스 SPSC Queue
-   - fork() 테스트로 검증
-2. Phase 9 순서: 36 → 37 → 38 → 39 → 40 → 41
-3. TASK_42 (Unix Socket)는 Phase 9와 병렬 진행 가능
+Phase 9 Feed Handler 프로세스 분리:
+1. ~~TASK_36: ShmSPSCQueue~~ ✅
+2. ~~TASK_37: FeederProcess~~ ✅
+3. **TASK_38 (Feeder Executables)** ← 다음
+   - 4개 거래소별 실행 파일 (upbit-feeder, bithumb-feeder, binance-feeder, mexc-feeder)
+4. TASK_39: Engine SHM Consumer
+5. TASK_40: Watchdog 다중 프로세스
+6. TASK_41: Phase 2 통합 테스트
 
 ---
 
@@ -802,7 +823,7 @@ Phase 8 모듈 통합:
 - 컴파일러: g++ 9.4.0
 - CMake: 3.16.3
 - 빌드 상태: ✅ 성공
-- 테스트 상태: ✅ lowlatency_test, rate_limiter_test, executor_test, transfer_test, event_bus_test, thread_manager_test, shutdown_test, health_check_test, tcp_server_test, alert_test, daily_limit_test, watchdog_test, cli_test, trading_stats_test, integration_test 통과
+- 테스트 상태: ✅ lowlatency_test, rate_limiter_test, executor_test, transfer_test, event_bus_test, thread_manager_test, shutdown_test, health_check_test, tcp_server_test, alert_test, daily_limit_test, watchdog_test, cli_test, trading_stats_test, integration_test, shm_queue_test, feeder_test 통과
 
 ---
 
@@ -817,7 +838,9 @@ Phase 5 (인프라):   ✅✅✅✅✅✅ 6/6 ✔️ 완료!
 Phase 6 (서버):     ✅✅✅✅✅✅ 6/6 ✔️ 완료!
 Phase 7 (모니터링): ✅✅✅ 3/3 ✔️ 완료!
 
-총 진행률: 35/35 (100%) 🎉 Phase 8 통합 완료!
+Phase 9 (피드):     ✅✅⬜⬜⬜⬜ 2/6
+
+총 진행률: 37/49 (76%) — Phase 9 진행 중
 ```
 
 > ⚠️ 실행 순서는 TASK_ORDER.md 참조
