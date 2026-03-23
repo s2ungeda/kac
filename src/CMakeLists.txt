@@ -66,6 +66,9 @@ add_subdirectory(ipc)
 # Feeder 라이브러리 (TASK_37: FeederProcess)
 add_subdirectory(feeder)
 
+# Cold Path 프로세스 (TASK_44~46: OrderManager, RiskManager, Monitor)
+add_subdirectory(cold)
+
 # Ops 라이브러리 (TASK_24, TASK_25, TASK_28)
 add_library(ops
     ops/alert.cpp

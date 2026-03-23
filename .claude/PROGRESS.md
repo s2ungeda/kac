@@ -66,9 +66,9 @@
 |---|--------|------|------|
 | 42 | Unix Socket IPC | ✅ 완료 | UnixSocketServer/Client, epoll, IPC 프로토콜 |
 | 43 | SHM Order Types | ✅ 완료 | ShmDualOrderResult POD, OrderChannel, to_shm() 변환 |
-| 44 | Order Manager Process | ⬜ 대기 | Order Manager 프로세스 |
-| 45 | Risk Manager Process | ⬜ 대기 | Risk Manager 프로세스 |
-| 46 | Monitor Process | ⬜ 대기 | Monitor 프로세스 |
+| 44 | Order Manager Process | ✅ 완료 | SHM OrderChannel → DualOrderExecutor → result SHM + UDS risk |
+| 45 | Risk Manager Process | ✅ 완료 | UDS 서버, DailyLossLimiter, 킬스위치, 거래 결과 수신 |
+| 46 | Monitor Process | ✅ 완료 | UDS 서버, AlertService, TradingStats, TcpServer, HealthChecker |
 | 47 | Engine Cold Removal | ⬜ 대기 | Engine Cold Path 제거 |
 | 48 | Watchdog Full | ⬜ 대기 | Watchdog 8 프로세스 |
 | 49 | Phase 3 Integration | ⬜ 대기 | Phase 3 통합 테스트 |
@@ -562,6 +562,18 @@
     - create_engine_side / create_order_manager_side 팩토리
   - to_shm(): SingleOrderResult/DualOrderResult → SHM POD 변환
   - ipc_test: 4개 SHM Order 테스트 모두 통과
+- TASK_44 Order Manager Process 완료
+  - OrderManagerProcess: SHM OrderChannel 폴링 → execute_sync → result push + UDS risk
+  - order-manager 실행 파일 (CLI: --config, --shm-request, --dry-run 등)
+  - OrderManagerStats: received/executed/success/failed/partial 추적
+- TASK_45 Risk Manager Process 완료
+  - RiskManagerProcess: UDS 서버로 거래 결과 수신
+  - DailyLossLimiter 연동 (일일 손실 한도, 경고, 킬스위치)
+  - risk-manager 실행 파일 (CLI: --daily-limit, --warning-pct 등)
+- TASK_46 Monitor Process 완료
+  - MonitorProcess: UDS 서버 + TcpServer + AlertService + TradingStats + HealthChecker
+  - IPC 메시지 타입별 처리 (OrderResult, KillSwitch, HealthPing 등)
+  - monitor 실행 파일 (CLI: --tcp-port, --socket 등)
 
 ### 세션 #20 (2026-03-20)
 - TASK_37 FeederProcess 완료
