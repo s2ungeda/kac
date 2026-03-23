@@ -6,6 +6,7 @@
  * - Cold Threads: Logger, Alert, Stats, Health, Display, FX Rate
  *
  * Phase 8 통합: TASK_30 (Skeleton) + TASK_31 (Hot/Cold Threads)
+ * Phase 9 통합: TASK_39 (SHM Consumer) - --engine 모드 추가
  */
 
 // === Core ===
@@ -39,6 +40,11 @@
 #include "arbitrage/infra/watchdog_client.hpp"
 #include "arbitrage/common/thread_manager.hpp"
 
+// === IPC (TASK_39: SHM Consumer) ===
+#include "arbitrage/ipc/ipc_types.hpp"
+#include "arbitrage/ipc/shm_manager.hpp"
+#include "arbitrage/ipc/shm_queue.hpp"
+
 // === Ops ===
 #include "arbitrage/ops/alert.hpp"
 #include "arbitrage/ops/daily_limit.hpp"
@@ -63,6 +69,7 @@
 #include <chrono>
 #include <algorithm>
 #include <condition_variable>
+#include <array>
 
 using namespace arbitrage;
 
@@ -84,10 +91,19 @@ namespace defaults {
 }
 
 // =============================================================================
+// 실행 모드
+// =============================================================================
+enum class RunMode {
+    Standalone,  // Phase 1: 단일 프로세스 (WebSocket 직접 연결)
+    Engine       // Phase 2: SHM 모드 (외부 Feeder 프로세스에서 시세 수신)
+};
+
+// =============================================================================
 // 커맨드라인 옵션
 // =============================================================================
 struct AppOptions {
     std::string config_path = "config/config.yaml";
+    RunMode mode = RunMode::Standalone;
     bool dry_run = false;
     bool verbose = false;
 };
@@ -96,10 +112,12 @@ AppOptions parse_args(int argc, char* argv[]) {
     AppOptions opts;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--dry-run")       opts.dry_run = true;
-        else if (arg == "--verbose")  opts.verbose = true;
+        if (arg == "--dry-run")         opts.dry_run = true;
+        else if (arg == "--verbose")    opts.verbose = true;
+        else if (arg == "--standalone") opts.mode = RunMode::Standalone;
+        else if (arg == "--engine")     opts.mode = RunMode::Engine;
         else if (arg == "--config" && i + 1 < argc) opts.config_path = argv[++i];
-        else if (arg[0] != '-')       opts.config_path = arg;
+        else if (arg[0] != '-')         opts.config_path = arg;
     }
     return opts;
 }
@@ -239,6 +257,119 @@ void hot_thread_func(
     }
 
     logger->info("Hot thread stopped: {} ticks, {} evaluations", tick_count, eval_count);
+}
+
+// =============================================================================
+// Hot Thread — SHM Mode (TASK_39: 4 SHM Queue Consumer)
+// =============================================================================
+// 4개 SHM 큐를 라운드로빈으로 폴링하여 Ticker를 소비
+//
+struct ShmFeedQueue {
+    Exchange exchange;
+    std::unique_ptr<ShmSegment> segment;
+    ShmSPSCQueue<Ticker> queue;
+};
+
+void hot_thread_shm_func(
+    std::array<ShmFeedQueue, 4>& shm_feeds,
+    PremiumCalculator& calculator,
+    DecisionEngine& engine,
+    SPSCQueue<DualOrderRequest>& order_queue,
+    std::shared_ptr<EventBus> event_bus,
+    std::atomic<double>& price_upbit,
+    std::atomic<double>& price_bithumb,
+    std::atomic<double>& price_binance,
+    std::atomic<double>& price_mexc,
+    std::shared_ptr<SimpleLogger> logger,
+    bool has_executor,
+    std::atomic<bool>& running
+) {
+    // 코어 고정 + High 우선순위 적용
+    ThreadConfig hot_cfg;
+    hot_cfg.name = "hot_thread_shm";
+    hot_cfg.core_id = defaults::HOT_THREAD_CORE;
+    hot_cfg.priority = ThreadPriority::High;
+    auto apply_result = ThreadManager::apply_to_current(hot_cfg);
+    if (apply_result) {
+        logger->info("Hot thread (SHM): core {} pinned, priority High", defaults::HOT_THREAD_CORE);
+    } else {
+        logger->warn("Hot thread (SHM): failed to apply config ({})", apply_result.error().message);
+    }
+
+    AdaptiveSpinWait waiter;
+    Ticker ticker;
+    uint64_t tick_count = 0;
+    uint64_t eval_count = 0;
+
+    while (running.load(std::memory_order_relaxed)) {
+        bool had_work = false;
+
+        // 4개 SHM 큐 라운드로빈 폴링
+        for (auto& feed : shm_feeds) {
+            while (feed.queue.pop(ticker)) {
+                had_work = true;
+                tick_count++;
+
+                double price = ticker.price;
+                Exchange ex = ticker.exchange;
+
+                // 프리미엄 계산기 갱신
+                calculator.update_price(ex, price);
+
+                // Display 스레드용 atomic 갱신
+                switch (ex) {
+                    case Exchange::Upbit:   price_upbit.store(price, std::memory_order_relaxed); break;
+                    case Exchange::Bithumb: price_bithumb.store(price, std::memory_order_relaxed); break;
+                    case Exchange::Binance: price_binance.store(price, std::memory_order_relaxed); break;
+                    case Exchange::MEXC:    price_mexc.store(price, std::memory_order_relaxed); break;
+                    default: break;
+                }
+            }
+
+            // Feeder 프로세스 종료 감지
+            if (feed.queue.valid() && feed.queue.is_closed() && !feed.queue.is_producer_alive()) {
+                logger->warn("Feeder {} disconnected (SHM closed)",
+                    exchange_name(feed.exchange));
+            }
+        }
+
+        // 기회 판단 (시세 업데이트가 있었을 때만)
+        if (had_work) {
+            auto best = calculator.get_best_opportunity();
+            if (best && best->premium_pct > defaults::MIN_EVALUATE_PREMIUM) {
+                auto decision = engine.evaluate(*best);
+                eval_count++;
+
+                if (decision.should_execute() && has_executor) {
+                    order_queue.push(decision.order_request);
+
+                    events::OpportunityDetected opp_evt;
+                    opp_evt.premium_pct = best->premium_pct;
+                    opp_evt.buy_exchange = best->buy_exchange;
+                    opp_evt.sell_exchange = best->sell_exchange;
+                    opp_evt.recommended_qty = decision.optimal_qty;
+                    opp_evt.expected_profit = decision.expected_profit_krw;
+                    opp_evt.confidence = decision.confidence;
+                    event_bus->publish(opp_evt);
+
+                    logger->info("ORDER QUEUED: {:.2f}% {} -> {} qty={:.1f}",
+                        best->premium_pct,
+                        exchange_name(best->buy_exchange),
+                        exchange_name(best->sell_exchange),
+                        decision.optimal_qty);
+                }
+            }
+        }
+
+        // Adaptive spin: spin → yield → microsleep
+        if (!had_work) {
+            waiter.wait();
+        } else {
+            waiter.reset();
+        }
+    }
+
+    logger->info("Hot thread (SHM) stopped: {} ticks, {} evaluations", tick_count, eval_count);
 }
 
 // =============================================================================
@@ -407,12 +538,16 @@ int main(int argc, char* argv[]) {
     Logger::init("logs");
     auto logger = Logger::create("main");
 
+    const bool engine_mode = (opts.mode == RunMode::Engine);
+    const char* mode_str = engine_mode ? "ENGINE (SHM)" : "STANDALONE";
+
     std::cout << "==============================================\n";
     std::cout << "   Kimchi Arbitrage System (C++)\n";
+    std::cout << "   Mode: " << mode_str << "\n";
     if (opts.dry_run) std::cout << "   *** DRY RUN MODE ***\n";
     std::cout << "==============================================\n\n";
 
-    logger->info("Starting Kimchi Arbitrage System");
+    logger->info("Starting Kimchi Arbitrage System (mode={})", mode_str);
     logger->info("Config: {}", opts.config_path);
     if (opts.dry_run) logger->warn("DRY RUN MODE - No real orders will be placed");
 
@@ -457,16 +592,60 @@ int main(int argc, char* argv[]) {
     decision_engine.set_risk_model(&risk_model);
 
     // =========================================================================
-    // 4. 네트워크 (WebSocket)
+    // 4a. 네트워크 — Standalone: WebSocket 직접 연결
     // =========================================================================
     boost::asio::io_context ioc;
     boost::asio::ssl::context ssl_ctx{boost::asio::ssl::context::tlsv12_client};
     ssl_ctx.set_default_verify_paths();
 
-    auto upbit_ws   = std::make_shared<UpbitWebSocket>(ioc, ssl_ctx);
-    auto binance_ws = std::make_shared<BinanceWebSocket>(ioc, ssl_ctx);
-    auto bithumb_ws = std::make_shared<BithumbWebSocket>(ioc, ssl_ctx);
-    auto mexc_ws    = std::make_shared<MEXCWebSocket>(ioc, ssl_ctx);
+    std::shared_ptr<UpbitWebSocket>   upbit_ws;
+    std::shared_ptr<BinanceWebSocket> binance_ws;
+    std::shared_ptr<BithumbWebSocket> bithumb_ws;
+    std::shared_ptr<MEXCWebSocket>    mexc_ws;
+
+    if (!engine_mode) {
+        upbit_ws   = std::make_shared<UpbitWebSocket>(ioc, ssl_ctx);
+        binance_ws = std::make_shared<BinanceWebSocket>(ioc, ssl_ctx);
+        bithumb_ws = std::make_shared<BithumbWebSocket>(ioc, ssl_ctx);
+        mexc_ws    = std::make_shared<MEXCWebSocket>(ioc, ssl_ctx);
+    }
+
+    // =========================================================================
+    // 4b. SHM Queues — Engine: 4개 Feeder SHM Queue Attach
+    // =========================================================================
+    constexpr size_t SHM_CAPACITY = 4096;
+    constexpr size_t SHM_SIZE = shm_queue_size(SHM_CAPACITY, sizeof(Ticker));
+
+    std::array<ShmFeedQueue, 4> shm_feeds;
+    if (engine_mode) {
+        const Exchange exchanges[] = {
+            Exchange::Upbit, Exchange::Bithumb, Exchange::Binance, Exchange::MEXC
+        };
+        for (size_t i = 0; i < 4; ++i) {
+            Exchange ex = exchanges[i];
+            const char* name = shm_names::feed_name(ex);
+            shm_feeds[i].exchange = ex;
+            try {
+                shm_feeds[i].segment = std::make_unique<ShmSegment>(name, SHM_SIZE, false);
+            } catch (const std::runtime_error& e) {
+                logger->error("Failed to attach SHM queue: {} — is {}-feeder running? ({})",
+                    name, exchange_name(ex), e.what());
+                std::cerr << "ERROR: Cannot attach to " << name
+                          << ". Start " << exchange_name(ex) << "-feeder first.\n";
+                return 1;
+            }
+            shm_feeds[i].queue = ShmSPSCQueue<Ticker>::attach_consumer(
+                shm_feeds[i].segment->data());
+            if (!shm_feeds[i].queue.valid()) {
+                logger->error("Invalid SHM queue: {} — check version/type mismatch", name);
+                std::cerr << "ERROR: SHM queue " << name << " is invalid.\n";
+                return 1;
+            }
+            logger->info("SHM attached: {} (capacity={}, producer={})",
+                name, shm_feeds[i].queue.capacity(), shm_feeds[i].queue.producer_pid());
+        }
+        logger->info("SHM mode: 4 feed queues attached");
+    }
 
     // =========================================================================
     // 5. 시세 처리
@@ -530,30 +709,51 @@ int main(int argc, char* argv[]) {
 
     // Health Checker
     auto& health = health_checker();
-    health.register_check("upbit_ws", [&]() -> ComponentHealth {
-        ComponentHealth h;
-        h.name = "upbit_ws";
-        h.status = upbit_ws->is_connected() ? HealthStatus::Healthy : HealthStatus::Unhealthy;
-        return h;
-    });
-    health.register_check("binance_ws", [&]() -> ComponentHealth {
-        ComponentHealth h;
-        h.name = "binance_ws";
-        h.status = binance_ws->is_connected() ? HealthStatus::Healthy : HealthStatus::Unhealthy;
-        return h;
-    });
-    health.register_check("bithumb_ws", [&]() -> ComponentHealth {
-        ComponentHealth h;
-        h.name = "bithumb_ws";
-        h.status = bithumb_ws->is_connected() ? HealthStatus::Healthy : HealthStatus::Unhealthy;
-        return h;
-    });
-    health.register_check("mexc_ws", [&]() -> ComponentHealth {
-        ComponentHealth h;
-        h.name = "mexc_ws";
-        h.status = mexc_ws->is_connected() ? HealthStatus::Healthy : HealthStatus::Unhealthy;
-        return h;
-    });
+    if (engine_mode) {
+        // SHM 모드: Feeder 프로세스 생존 여부 확인
+        for (size_t i = 0; i < 4; ++i) {
+            auto& feed = shm_feeds[i];
+            std::string name = std::string(exchange_name(feed.exchange)) + "_feeder";
+            health.register_check(name, [&feed, name]() -> ComponentHealth {
+                ComponentHealth h;
+                h.name = name;
+                if (!feed.queue.valid()) {
+                    h.status = HealthStatus::Unhealthy;
+                } else if (feed.queue.is_closed() || !feed.queue.is_producer_alive()) {
+                    h.status = HealthStatus::Unhealthy;
+                } else {
+                    h.status = HealthStatus::Healthy;
+                }
+                return h;
+            });
+        }
+    } else {
+        // Standalone 모드: WebSocket 연결 상태 확인
+        health.register_check("upbit_ws", [&]() -> ComponentHealth {
+            ComponentHealth h;
+            h.name = "upbit_ws";
+            h.status = upbit_ws->is_connected() ? HealthStatus::Healthy : HealthStatus::Unhealthy;
+            return h;
+        });
+        health.register_check("binance_ws", [&]() -> ComponentHealth {
+            ComponentHealth h;
+            h.name = "binance_ws";
+            h.status = binance_ws->is_connected() ? HealthStatus::Healthy : HealthStatus::Unhealthy;
+            return h;
+        });
+        health.register_check("bithumb_ws", [&]() -> ComponentHealth {
+            ComponentHealth h;
+            h.name = "bithumb_ws";
+            h.status = bithumb_ws->is_connected() ? HealthStatus::Healthy : HealthStatus::Unhealthy;
+            return h;
+        });
+        health.register_check("mexc_ws", [&]() -> ComponentHealth {
+            ComponentHealth h;
+            h.name = "mexc_ws";
+            h.status = mexc_ws->is_connected() ? HealthStatus::Healthy : HealthStatus::Unhealthy;
+            return h;
+        });
+    }
     health.register_check("decision_engine", [&]() -> ComponentHealth {
         ComponentHealth h;
         h.name = "decision_engine";
@@ -664,48 +864,60 @@ int main(int argc, char* argv[]) {
     }
 
     // =========================================================================
-    // 8. SPSC Queues + WebSocket → Hot Thread Bridge
+    // 8. SPSC Queues + Data Source Bridge
     // =========================================================================
     SPSCQueue<WebSocketEvent> ws_queue(defaults::WS_QUEUE_CAPACITY);
     SPSCQueue<DualOrderRequest> order_queue(defaults::ORDER_QUEUE_CAPACITY);
 
-    // WebSocket 콜백: IO 스레드에서 SPSC Queue로 push (fire-and-forget)
-    // IO 스레드는 단일 스레드(io_context) → SPSC Producer 조건 충족
-    upbit_ws->on_event([&ws_queue](const WebSocketEvent& evt) {
-        if (evt.is_ticker() || evt.is_trade()) {
-            ws_queue.push(evt);
-        }
-    });
+    if (!engine_mode) {
+        // Standalone: WebSocket 콜백 → in-process SPSC Queue
+        // IO 스레드는 단일 스레드(io_context) → SPSC Producer 조건 충족
+        upbit_ws->on_event([&ws_queue](const WebSocketEvent& evt) {
+            if (evt.is_ticker() || evt.is_trade()) {
+                ws_queue.push(evt);
+            }
+        });
 
-    binance_ws->on_event([&ws_queue](const WebSocketEvent& evt) {
-        if (evt.is_ticker() || evt.is_trade()) {
-            ws_queue.push(evt);
-        }
-    });
+        binance_ws->on_event([&ws_queue](const WebSocketEvent& evt) {
+            if (evt.is_ticker() || evt.is_trade()) {
+                ws_queue.push(evt);
+            }
+        });
 
-    bithumb_ws->on_event([&ws_queue](const WebSocketEvent& evt) {
-        if (evt.is_ticker() || evt.is_trade()) {
-            ws_queue.push(evt);
-        }
-    });
+        bithumb_ws->on_event([&ws_queue](const WebSocketEvent& evt) {
+            if (evt.is_ticker() || evt.is_trade()) {
+                ws_queue.push(evt);
+            }
+        });
 
-    mexc_ws->on_event([&ws_queue](const WebSocketEvent& evt) {
-        if (evt.is_ticker() || evt.is_trade()) {
-            ws_queue.push(evt);
-        }
-    });
+        mexc_ws->on_event([&ws_queue](const WebSocketEvent& evt) {
+            if (evt.is_ticker() || evt.is_trade()) {
+                ws_queue.push(evt);
+            }
+        });
+    }
+    // Engine mode: SHM queues are already attached in section 4b
 
     // =========================================================================
     // 9. ShutdownManager 등록
     // =========================================================================
-    shutdown_mgr.register_component("websockets", [&] {
-        running.store(false, std::memory_order_relaxed);
-        cv_shutdown.notify_all();
-        upbit_ws->disconnect();
-        binance_ws->disconnect();
-        bithumb_ws->disconnect();
-        mexc_ws->disconnect();
-    }, ShutdownPriority::Network, std::chrono::seconds(5));
+    if (engine_mode) {
+        shutdown_mgr.register_component("shm_feeds", [&] {
+            running.store(false, std::memory_order_relaxed);
+            cv_shutdown.notify_all();
+            // SHM 세그먼트는 ShmFeedQueue 소멸자에서 정리됨
+            logger->info("SHM feed queues detached");
+        }, ShutdownPriority::Network, std::chrono::seconds(2));
+    } else {
+        shutdown_mgr.register_component("websockets", [&] {
+            running.store(false, std::memory_order_relaxed);
+            cv_shutdown.notify_all();
+            upbit_ws->disconnect();
+            binance_ws->disconnect();
+            bithumb_ws->disconnect();
+            mexc_ws->disconnect();
+        }, ShutdownPriority::Network, std::chrono::seconds(5));
+    }
 
     shutdown_mgr.register_component("tcp_server", [&] {
         if (tcp_server) {
@@ -762,53 +974,75 @@ int main(int argc, char* argv[]) {
         } catch (...) {}
     }, ShutdownPriority::Logging, std::chrono::seconds(1));
 
-    shutdown_mgr.register_component("io_context", [&] {
-        ioc.stop();
-    }, ShutdownPriority::Logging, std::chrono::seconds(2));
-
-    // =========================================================================
-    // 10. 심볼 구독 & WebSocket 연결
-    // =========================================================================
-    const auto& primary_symbols = Config::instance().primary_symbols();
-    if (primary_symbols.empty()) {
-        logger->error("No primary symbols configured");
-        return 1;
+    if (!engine_mode) {
+        shutdown_mgr.register_component("io_context", [&] {
+            ioc.stop();
+        }, ShutdownPriority::Logging, std::chrono::seconds(2));
     }
 
-    const auto& symbol = primary_symbols[0];
-    std::cout << "Symbol: " << symbol.symbol << "\n\n";
+    // =========================================================================
+    // 10. 심볼 구독 & WebSocket 연결 (Standalone only)
+    // =========================================================================
+    if (!engine_mode) {
+        const auto& primary_symbols = Config::instance().primary_symbols();
+        if (primary_symbols.empty()) {
+            logger->error("No primary symbols configured");
+            return 1;
+        }
 
-    upbit_ws->subscribe_trade({symbol.upbit});
-    binance_ws->subscribe_trade({symbol.binance});
-    bithumb_ws->subscribe_trade({symbol.bithumb});
-    mexc_ws->subscribe_trade({symbol.mexc});
+        const auto& symbol = primary_symbols[0];
+        std::cout << "Symbol: " << symbol.symbol << "\n\n";
 
-    std::cout << "Connecting to exchanges...\n";
-    upbit_ws->connect("api.upbit.com", "443", "/websocket/v1");
-    std::string binance_symbol_lower = symbol.binance;
-    std::transform(binance_symbol_lower.begin(), binance_symbol_lower.end(),
-                   binance_symbol_lower.begin(), ::tolower);
-    binance_ws->connect("fstream.binance.com", "443",
-                        "/stream?streams=" + binance_symbol_lower + "@aggTrade");
-    bithumb_ws->connect("ws-api.bithumb.com", "443", "/websocket/v1");
-    mexc_ws->connect("contract.mexc.com", "443", "/edge");
+        upbit_ws->subscribe_trade({symbol.upbit});
+        binance_ws->subscribe_trade({symbol.binance});
+        bithumb_ws->subscribe_trade({symbol.bithumb});
+        mexc_ws->subscribe_trade({symbol.mexc});
+
+        std::cout << "Connecting to exchanges...\n";
+        upbit_ws->connect("api.upbit.com", "443", "/websocket/v1");
+        std::string binance_symbol_lower = symbol.binance;
+        std::transform(binance_symbol_lower.begin(), binance_symbol_lower.end(),
+                       binance_symbol_lower.begin(), ::tolower);
+        binance_ws->connect("fstream.binance.com", "443",
+                            "/stream?streams=" + binance_symbol_lower + "@aggTrade");
+        bithumb_ws->connect("ws-api.bithumb.com", "443", "/websocket/v1");
+        mexc_ws->connect("contract.mexc.com", "443", "/edge");
+    } else {
+        std::cout << "SHM mode: waiting for feeder data...\n";
+    }
 
     // =========================================================================
     // 11. 스레드 시작
     // =========================================================================
     bool has_executor = (dual_executor != nullptr);
 
-    // IO Thread (Boost.Asio)
-    std::thread io_thread([&ioc]() { ioc.run(); });
+    // IO Thread (Boost.Asio) — Standalone only
+    std::thread io_thread;
+    if (!engine_mode) {
+        io_thread = std::thread([&ioc]() { ioc.run(); });
+    }
 
     // Hot Thread (Core-Pinned, Busy-Poll)
-    std::thread hot_thread(hot_thread_func,
-        std::ref(ws_queue), std::ref(calculator),
-        std::ref(decision_engine), std::ref(order_queue),
-        event_bus,
-        std::ref(price_upbit), std::ref(price_bithumb),
-        std::ref(price_binance), std::ref(price_mexc),
-        logger, has_executor, std::ref(running));
+    std::thread hot_thread;
+    if (engine_mode) {
+        // SHM 모드: 4개 SHM 큐에서 Ticker 소비
+        hot_thread = std::thread(hot_thread_shm_func,
+            std::ref(shm_feeds), std::ref(calculator),
+            std::ref(decision_engine), std::ref(order_queue),
+            event_bus,
+            std::ref(price_upbit), std::ref(price_bithumb),
+            std::ref(price_binance), std::ref(price_mexc),
+            logger, has_executor, std::ref(running));
+    } else {
+        // Standalone 모드: WebSocket → in-process SPSC Queue
+        hot_thread = std::thread(hot_thread_func,
+            std::ref(ws_queue), std::ref(calculator),
+            std::ref(decision_engine), std::ref(order_queue),
+            event_bus,
+            std::ref(price_upbit), std::ref(price_bithumb),
+            std::ref(price_binance), std::ref(price_mexc),
+            logger, has_executor, std::ref(running));
+    }
 
     // Order Thread (Cold — only if executor is available)
     std::thread order_thread;

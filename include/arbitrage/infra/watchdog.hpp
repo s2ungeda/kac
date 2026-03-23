@@ -1,13 +1,18 @@
 #pragma once
 
 /**
- * Watchdog Service (TASK_26)
+ * Watchdog Service (TASK_26 + TASK_40)
  *
  * 메인 프로세스 감시 및 장애 복구
  * - 하트비트 모니터링
  * - 자동 재시작
  * - 상태 영속화
  * - 리소스 모니터링
+ *
+ * TASK_40: 다중 프로세스 관리
+ * - 4개 Feeder + arb-engine 시작/감시/재시작
+ * - 순서 있는 시작 (Feeder → Engine)
+ * - 개별 프로세스 자동 재시작
  */
 
 #include "arbitrage/infra/watchdog_client.hpp"
@@ -17,6 +22,7 @@
 #include <condition_variable>
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -151,6 +157,39 @@ struct RestartEvent {
 };
 
 // =============================================================================
+// TASK_40: 자식 프로세스 관리
+// =============================================================================
+
+/**
+ * 자식 프로세스 설정
+ */
+struct ChildProcessConfig {
+    std::string name;                       // 프로세스 식별자 (e.g., "upbit-feeder")
+    std::string executable;                 // 실행 파일 경로
+    std::vector<std::string> arguments;     // 실행 인자
+    int restart_delay_ms{2000};             // 재시작 전 대기 (ms)
+    int max_restarts{10};                   // 최대 재시작 횟수 (0 = 무제한)
+    int restart_window_sec{3600};           // 재시작 횟수 카운트 윈도우
+    bool critical{true};                    // true: 영구 실패 시 전체 시스템 종료
+    int start_order{0};                     // 시작 순서 (낮은 번호 먼저)
+    int start_delay_ms{0};                  // 이전 프로세스 시작 후 대기 시간
+};
+
+/**
+ * 자식 프로세스 런타임 정보
+ */
+struct ChildProcessInfo {
+    ChildProcessConfig config;
+    int pid{-1};
+    bool is_running{false};
+    int restart_count{0};
+    int exit_code{0};
+    std::chrono::system_clock::time_point start_time;
+    std::chrono::steady_clock::time_point last_restart_time;
+    std::string last_error;
+};
+
+// =============================================================================
 // Watchdog
 // =============================================================================
 
@@ -158,6 +197,7 @@ struct RestartEvent {
  * 워치독 서비스
  *
  * 메인 프로세스를 감시하고 장애 시 복구
+ * TASK_40: 다중 자식 프로세스 관리 추가
  */
 class Watchdog {
 public:
@@ -379,6 +419,56 @@ public:
      */
     WatchdogConfig config() const;
 
+    // =========================================================================
+    // TASK_40: 다중 프로세스 관리
+    // =========================================================================
+
+    /**
+     * 자식 프로세스 등록
+     */
+    void add_child(const ChildProcessConfig& config);
+
+    /**
+     * 등록된 자식 프로세스 제거 (실행 중이면 종료)
+     */
+    void remove_child(const std::string& name);
+
+    /**
+     * 모든 자식 프로세스 시작 (start_order 순서, start_delay 적용)
+     */
+    void launch_all_children();
+
+    /**
+     * 모든 자식 프로세스 종료 (역순)
+     */
+    void stop_all_children();
+
+    /**
+     * 특정 자식 프로세스 재시작
+     */
+    void restart_child(const std::string& name, const std::string& reason = "manual");
+
+    /**
+     * 자식 프로세스 상태 조회
+     */
+    std::vector<ChildProcessInfo> get_children_status() const;
+
+    /**
+     * 자식 프로세스 모니터링 (이미 실행 중인 자식 감시)
+     * monitor_loop에서 호출됨
+     */
+    void check_children();
+
+    /**
+     * 기본 Feeder + Engine 구성 생성
+     *
+     * @param bin_dir 실행 파일 디렉토리 (e.g., "./build/bin")
+     * @param engine_args 엔진 추가 인자 (e.g., {"--dry-run"})
+     */
+    static std::vector<ChildProcessConfig> make_default_children(
+        const std::string& bin_dir = "./",
+        const std::vector<std::string>& engine_args = {});
+
 private:
     /**
      * 모니터 스레드
@@ -485,6 +575,19 @@ private:
     // IPC 서버
     int ipc_socket_fd_{-1};
     std::atomic<bool> ipc_running_{false};
+
+    // TASK_40: 다중 자식 프로세스 관리
+    mutable std::mutex children_mutex_;
+    std::map<std::string, ChildProcessInfo> children_;
+
+    // 자식 프로세스 시작 (fork+exec)
+    int launch_child(const ChildProcessConfig& config);
+
+    // 자식 프로세스 종료
+    void kill_child(int pid, int timeout_ms = 5000);
+
+    // 자식 프로세스 재시작 가능 여부
+    bool can_restart_child(const ChildProcessInfo& info) const;
 };
 
 // =============================================================================

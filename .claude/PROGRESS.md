@@ -6,8 +6,8 @@
 ---
 
 ## 📅 마지막 업데이트
-- 날짜: 2026-03-20
-- 세션: #20
+- 날짜: 2026-03-23
+- 세션: #21
 
 ---
 
@@ -55,10 +55,10 @@
 |---|--------|------|------|
 | 36 | ShmSPSCQueue | ✅ 완료 | SHM SPSC Queue + ShmSegment RAII |
 | 37 | FeederProcess | ✅ 완료 | FeederProcess 기반 클래스 + CLI |
-| 38 | Feeder Executables | ⬜ 대기 | 4개 Feeder 실행 파일 |
-| 39 | Engine SHM Consumer | ⬜ 대기 | arb-engine SHM 소비자 |
-| 40 | Watchdog Multiprocess | ⬜ 대기 | Watchdog 다중 프로세스 |
-| 41 | Phase 2 Integration | ⬜ 대기 | Phase 2 통합 테스트 |
+| 38 | Feeder Executables | ✅ 완료 | 4개 Feeder 실행 파일 (upbit/bithumb/binance/mexc-feeder) |
+| 39 | Engine SHM Consumer | ✅ 완료 | --engine 모드: 4 SHM Queue 소비, --standalone 모드 보존 |
+| 40 | Watchdog Multiprocess | ✅ 완료 | 다중 프로세스 관리 (Feeder → Engine 순서 시작/감시/재시작) |
+| 41 | Phase 2 Integration | ✅ 완료 | 10개 테스트 통과 (SHM IPC + Watchdog + Build) |
 
 ---
 
@@ -486,6 +486,52 @@
   - integration_test (6개 테스트 모두 통과)
 - Phase 7 (모니터링) 100% 완료!
 - 🎉 프로젝트 전체 완료!
+
+### 세션 #21 (2026-03-23)
+- TASK_38 Feeder Executables 완료
+  - src/feeder/upbit_main.cpp: Upbit feeder 실행 파일
+  - src/feeder/bithumb_main.cpp: Bithumb feeder 실행 파일
+  - src/feeder/binance_main.cpp: Binance feeder 실행 파일
+  - src/feeder/mexc_main.cpp: MEXC feeder 실행 파일
+  - src/feeder/CMakeLists.txt: 4개 실행 파일 빌드 설정 추가
+  - 전체 빌드 성공, 4개 바이너리 생성 확인
+- TASK_39 Engine SHM Consumer 완료
+  - RunMode enum: Standalone / Engine 모드 분기
+  - --engine 모드:
+    - 4개 SHM Queue attach (ShmSPSCQueue<Ticker>)
+    - hot_thread_shm_func: 라운드로빈 폴링으로 Ticker 소비
+    - Feeder 프로세스 생존 체크 (health_checker)
+    - WebSocket/io_context 생성 안 함 (리소스 절약)
+  - --standalone 모드: 기존 동작 완전 보존
+  - SHM attach 실패 시 graceful error + exit(1)
+  - ipc 라이브러리 링크 추가 (src/CMakeLists.txt)
+  - 빌드 성공 (에러 0, 경고 0)
+- TASK_40 Watchdog Multiprocess 완료
+  - ChildProcessConfig struct: 이름, 실행 파일, 인자, 재시작 설정, 시작 순서
+  - ChildProcessInfo struct: 런타임 상태 (PID, 재시작 횟수, 에러)
+  - add_child(), remove_child(): 자식 프로세스 등록/제거
+  - launch_all_children(): start_order 순서대로 시작 + start_delay 적용
+  - stop_all_children(): 역순 SIGTERM→SIGKILL 종료
+  - restart_child(): 개별 재시작 (max_restarts 제한)
+  - check_children(): waitpid WNOHANG으로 종료 감지 → 자동 재시작
+  - make_default_children(): 4 Feeder + Engine 기본 구성 생성
+  - critical 프로세스 영구 실패 시 전체 시스템 종료
+  - 기존 watchdog_test 32개 모두 통과
+- TASK_41 Phase 2 Integration Test 완료
+  - tests/integration/phase2_test.cpp: 10개 테스트
+  - SHM IPC 테스트 (5개):
+    - Ticker IPC (fork, 100 tickers, 순서 보장)
+    - Multi-Exchange IPC (4 feeder fork, 50*4=200 tickers)
+    - Latency Benchmark (~110us avg on WSL2, <500us 통과)
+    - Producer Death Detection (close + is_closed)
+    - Queue Full Handling (capacity-1 검증)
+  - Watchdog Multi-Process 테스트 (4개):
+    - 자식 등록/제거
+    - Launch/Stop (sleep 프로세스)
+    - 순서 시작 (start_delay 적용 확인)
+    - make_default_children (5 프로세스 구성)
+  - Build Verification (1개)
+  - Phase 9 (Feed Handler 프로세스 분리) 100% 완료!
 
 ### 세션 #20 (2026-03-20)
 - TASK_37 FeederProcess 완료

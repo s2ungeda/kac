@@ -174,6 +174,7 @@ target_link_libraries(arbitrage
         executor
         infra
         ops
+        ipc
         exchange_websocket
         exchange_order
         Threads::Threads

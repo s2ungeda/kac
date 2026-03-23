@@ -57,3 +57,33 @@ endif()
 
 # CTest 등록
 add_test(NAME integration_test COMMAND integration_test)
+
+# Phase 2 Integration Test (TASK_41)
+add_executable(phase2_test
+    integration/phase2_test.cpp
+)
+
+target_include_directories(phase2_test
+    PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+)
+
+target_link_libraries(phase2_test
+    PRIVATE
+        common
+        ipc
+        infra
+        Threads::Threads
+)
+
+# Boost 링크
+if(Boost_FOUND)
+    target_link_libraries(phase2_test PRIVATE ${Boost_LIBRARIES})
+endif()
+
+# OpenSSL 링크
+if(OpenSSL_FOUND)
+    target_link_libraries(phase2_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+endif()
+
+add_test(NAME phase2_test COMMAND phase2_test)
