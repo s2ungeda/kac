@@ -133,7 +133,7 @@ bool WatchdogClient::do_connect(const std::string& path) {
     return true;
 #else
     // Windows Named Pipe
-    // TODO: Windows 구현
+    // NOTE: Linux only (AF_UNIX)
     return false;
 #endif
 }
@@ -184,7 +184,7 @@ bool WatchdogClient::send_heartbeat_now() {
     hb.warning_count = warning_count_.load(std::memory_order_relaxed);
 
     // 메모리/CPU는 필요시 조회
-    // TODO: 실제 값 조회
+    // NOTE: 하드코딩 — /proc 파싱으로 대체 가능
 
     auto data = serialize_heartbeat(hb);
     if (do_send(data)) {

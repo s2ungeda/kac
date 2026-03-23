@@ -254,7 +254,7 @@ std::future<Result<TransferResult>> TransferManager::wait_completion(
 // =============================================================================
 
 Result<std::string> TransferManager::withdraw(Exchange ex, const TransferRequest& request) {
-    // TODO: 실제 거래소 API 연동
+    // NOTE: 실제 거래소 API 연동 필요 (API 키 설정 후)
     // 각 거래소별 출금 API:
     // - Upbit: POST /v1/withdraws/coin
     // - Binance: POST /sapi/v1/capital/withdraw/apply
@@ -296,7 +296,7 @@ Result<std::string> TransferManager::withdraw(Exchange ex, const TransferRequest
 Result<TransferStatus> TransferManager::get_withdraw_status(
     Exchange ex, const std::string& transfer_id)
 {
-    // TODO: 실제 거래소 API 연동
+    // NOTE: 실제 거래소 API 연동 필요 (API 키 설정 후)
     // 각 거래소별 출금 상태 조회 API:
     // - Upbit: GET /v1/withdraw?uuid={transfer_id}
     // - Binance: GET /sapi/v1/capital/withdraw/history
@@ -316,7 +316,7 @@ Result<TransferStatus> TransferManager::get_withdraw_status(
 Result<bool> TransferManager::verify_deposit(
     Exchange ex, const std::string& tx_hash)
 {
-    // TODO: 실제 거래소 API 연동
+    // NOTE: 실제 거래소 API 연동 필요 (API 키 설정 후)
     // 각 거래소별 입금 확인 API:
     // - Upbit: GET /v1/deposits?txid={tx_hash}
     // - Binance: GET /sapi/v1/capital/deposit/hisrec
@@ -336,7 +336,7 @@ Result<bool> TransferManager::verify_deposit(
 Result<std::string> TransferManager::get_tx_hash(
     Exchange ex, const std::string& transfer_id)
 {
-    // TODO: 출금 상태 조회 시 tx_hash 함께 조회
+    // NOTE: 출금 상태 조회 시 tx_hash 함께 조회 필요
 
     // Dry run 모드
     if (dry_run_) {

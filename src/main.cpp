@@ -24,8 +24,6 @@
 #include "arbitrage/strategy/premium_calc.hpp"
 #include "arbitrage/strategy/decision_engine.hpp"
 #include "arbitrage/strategy/risk_model.hpp"
-// StrategyExecutor는 TASK_32에서 통합 (StrategyConfig 이름 충돌 해결 필요)
-// #include "arbitrage/strategy/strategy_executor.hpp"
 
 // === Executor ===
 #include "arbitrage/executor/dual_order.hpp"

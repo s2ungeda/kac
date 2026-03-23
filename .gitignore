@@ -69,3 +69,10 @@ data/
 
 # IDE
 .vs/
+
+# WSL2 Zone.Identifier files
+*:Zone.Identifier
+
+# Claude Code session data
+.claude/projects/
+install.sh

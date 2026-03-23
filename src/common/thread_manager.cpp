@@ -66,7 +66,7 @@ void ThreadManager::initialize(const ThreadManagerConfig& config) {
 }
 
 Result<void> ThreadManager::load_config(const std::string& /*config_path*/) {
-    // TODO: YAML 설정 파일 로드 구현
+    // NOTE: YAML 미사용 — 코드 기반 설정
     // 현재는 코드에서 직접 설정
     return Ok();
 }
@@ -494,7 +494,7 @@ Result<void> ThreadManager::update_affinity(const std::string& thread_name, int 
     // 설정 업데이트
     active_configs_[thread_name].core_id = core_id;
 
-    // TODO: 실행 중인 스레드의 어피니티 변경
+    // NOTE: 실행 중 어피니티 변경은 ThreadManager::apply_to_current() 사용
     // 현재는 스레드가 직접 호출해야 함
 
     return Ok();

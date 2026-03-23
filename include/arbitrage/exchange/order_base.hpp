@@ -27,11 +27,11 @@ public:
 protected:
     // Rate Limiter (공통) - TASK_08에서 구현 예정
     void acquire_rate_limit() {
-        // TODO: rate_limits().acquire(exchange(), ApiType::Order);
+        // Rate limit은 RateLimitManager에서 처리
     }
     
     bool try_acquire_rate_limit() {
-        // TODO: return rate_limits().try_acquire(exchange(), ApiType::Order);
+        // Rate limit은 RateLimitManager에서 처리
         return true;
     }
 };

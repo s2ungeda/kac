@@ -173,7 +173,7 @@ void Watchdog::send_command(WatchdogCommand cmd, const std::string& payload) {
     // 페이로드
     data.insert(data.end(), payload.begin(), payload.end());
 
-    // TODO: 연결된 클라이언트들에게 전송
+    // IPC 클라이언트 브로드캐스트는 TASK_40에서 구현
 #endif
 }
 
@@ -622,12 +622,6 @@ void Watchdog::send_alert(const std::string& level, const std::string& message) 
             // 알림 콜백 에러 (처리 계속)
         }
     }
-
-    // AlertService 사용
-    // auto alert_svc = alert_service_.lock();
-    // if (alert_svc) {
-    //     // TODO: AlertService 연동
-    // }
 
     // EventBus 이벤트 발행
     auto bus = event_bus_.lock();

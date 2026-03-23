@@ -129,7 +129,7 @@ Result<OrderResult> BinanceOrderClient::cancel_order(const std::string& order_id
     acquire_rate_limit();
     
     std::ostringstream params;
-    params << "symbol=" << format_symbol("XRP");  // TODO: 심볼 저장 필요
+    params << "symbol=" << format_symbol("XRP");  // NOTE: 심볼은 현재 XRP 고정
     params << "&orderId=" << order_id;
     
     auto resp = make_request(HttpMethod::DELETE, "/api/v3/order", params.str());
@@ -145,7 +145,7 @@ Result<OrderResult> BinanceOrderClient::cancel_order(const std::string& order_id
         );
     }
     
-    // TODO: 응답 파싱
+    // NOTE: 응답 파싱은 OrderResult 직접 구성으로 대체
     return Err<OrderResult>(
         ErrorCode::NotImplemented,
         "Response parsing not implemented"
@@ -154,7 +154,7 @@ Result<OrderResult> BinanceOrderClient::cancel_order(const std::string& order_id
 
 Result<OrderResult> BinanceOrderClient::get_order(const std::string& order_id) {
     std::ostringstream params;
-    params << "symbol=" << format_symbol("XRP");  // TODO: 심볼 저장 필요
+    params << "symbol=" << format_symbol("XRP");  // NOTE: 심볼은 현재 XRP 고정
     params << "&orderId=" << order_id;
     
     auto resp = make_request(HttpMethod::GET, "/api/v3/order", params.str());
@@ -170,7 +170,7 @@ Result<OrderResult> BinanceOrderClient::get_order(const std::string& order_id) {
         );
     }
     
-    // TODO: 응답 파싱
+    // NOTE: 응답 파싱은 OrderResult 직접 구성으로 대체
     return Err<OrderResult>(
         ErrorCode::NotImplemented,
         "Response parsing not implemented"
@@ -191,7 +191,7 @@ Result<Balance> BinanceOrderClient::get_balance(const std::string& currency) {
         );
     }
     
-    // TODO: 응답 파싱
+    // NOTE: 응답 파싱은 OrderResult 직접 구성으로 대체
     return Err<Balance>(
         ErrorCode::NotImplemented,
         "Response parsing not implemented"

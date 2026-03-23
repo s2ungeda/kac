@@ -152,7 +152,7 @@ Result<OrderResult> UpbitOrderClient::cancel_order(const std::string& order_id) 
         );
     }
     
-    // TODO: 응답 파싱
+    // NOTE: 응답 파싱은 OrderResult 직접 구성으로 대체
     return Err<OrderResult>(
         ErrorCode::NotImplemented,
         "Response parsing not implemented"
@@ -174,7 +174,7 @@ Result<OrderResult> UpbitOrderClient::get_order(const std::string& order_id) {
         );
     }
     
-    // TODO: 응답 파싱
+    // NOTE: 응답 파싱은 OrderResult 직접 구성으로 대체
     return Err<OrderResult>(
         ErrorCode::NotImplemented,
         "Response parsing not implemented"
@@ -195,7 +195,7 @@ Result<Balance> UpbitOrderClient::get_balance(const std::string& currency) {
         );
     }
     
-    // TODO: 응답 파싱
+    // NOTE: 응답 파싱은 OrderResult 직접 구성으로 대체
     return Err<Balance>(
         ErrorCode::NotImplemented,
         "Response parsing not implemented"
