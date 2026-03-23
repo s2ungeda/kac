@@ -87,3 +87,30 @@ if(OpenSSL_FOUND)
 endif()
 
 add_test(NAME phase2_test COMMAND phase2_test)
+
+# IPC Test (TASK_42 + TASK_43)
+add_executable(ipc_test
+    integration/ipc_test.cpp
+)
+
+target_include_directories(ipc_test
+    PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+)
+
+target_link_libraries(ipc_test
+    PRIVATE
+        common
+        ipc
+        Threads::Threads
+)
+
+if(Boost_FOUND)
+    target_link_libraries(ipc_test PRIVATE ${Boost_LIBRARIES})
+endif()
+
+if(OpenSSL_FOUND)
+    target_link_libraries(ipc_test PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+endif()
+
+add_test(NAME ipc_test COMMAND ipc_test)

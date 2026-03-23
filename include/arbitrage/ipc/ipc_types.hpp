@@ -89,4 +89,63 @@ inline constexpr size_t shm_queue_size(size_t capacity, size_t element_size) {
            + capacity * element_size;
 }
 
+// =============================================================================
+// TASK_43: SHM Order POD Types
+// =============================================================================
+// SingleOrderResult의 std::optional/std::string → 고정 크기 POD 변환
+
+struct ShmSingleOrderResult {
+    Exchange exchange;                        // 1 byte
+    bool success;                             // 1 byte
+    OrderStatus status;                       // 1 byte
+    uint8_t _pad1[5];                         // 5 bytes
+
+    // OrderResult 필드 (인라인)
+    char order_id[MAX_ORDER_ID_LEN];          // 48 bytes
+    double filled_qty;                        // 8 bytes
+    double avg_price;                         // 8 bytes
+    double commission;                        // 8 bytes
+
+    // 시간 (microseconds since epoch — steady_clock 대신 system_clock)
+    int64_t latency_us;                       // 8 bytes
+    int64_t start_time_us;                    // 8 bytes
+    int64_t end_time_us;                      // 8 bytes
+
+    // 에러 (Error의 std::string → char[])
+    uint16_t error_code;                      // 2 bytes
+    uint8_t _pad2[6];                         // 6 bytes
+    char error_message[MAX_MESSAGE_LEN];      // 128 bytes
+};
+
+static_assert(std::is_trivially_copyable_v<ShmSingleOrderResult>,
+              "ShmSingleOrderResult must be trivially copyable");
+
+struct alignas(CACHE_LINE_SIZE) ShmDualOrderResult {
+    ShmSingleOrderResult buy_result;
+    ShmSingleOrderResult sell_result;
+
+    int64_t request_id;
+    double actual_premium;
+    double gross_profit;
+    int64_t total_latency_us;
+
+    bool both_success() const {
+        return buy_result.success && sell_result.success;
+    }
+
+    bool both_filled() const {
+        return buy_result.success && sell_result.success &&
+               buy_result.status == OrderStatus::Filled &&
+               sell_result.status == OrderStatus::Filled;
+    }
+
+    bool partial_fill() const {
+        return (buy_result.success && !sell_result.success) ||
+               (!buy_result.success && sell_result.success);
+    }
+};
+
+static_assert(std::is_trivially_copyable_v<ShmDualOrderResult>,
+              "ShmDualOrderResult must be trivially copyable");
+
 }  // namespace arbitrage

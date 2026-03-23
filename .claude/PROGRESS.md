@@ -49,7 +49,7 @@
 
 ## 🔄 진행 중인 태스크
 
-### 현재: Phase 9 - Feed Handler 프로세스 분리
+### 완료: Phase 9 - Feed Handler 프로세스 분리
 
 | # | 태스크 | 상태 | 설명 |
 |---|--------|------|------|
@@ -59,6 +59,19 @@
 | 39 | Engine SHM Consumer | ✅ 완료 | --engine 모드: 4 SHM Queue 소비, --standalone 모드 보존 |
 | 40 | Watchdog Multiprocess | ✅ 완료 | 다중 프로세스 관리 (Feeder → Engine 순서 시작/감시/재시작) |
 | 41 | Phase 2 Integration | ✅ 완료 | 10개 테스트 통과 (SHM IPC + Watchdog + Build) |
+
+### 현재: Phase 10 - Cold Path 프로세스 분리
+
+| # | 태스크 | 상태 | 설명 |
+|---|--------|------|------|
+| 42 | Unix Socket IPC | ✅ 완료 | UnixSocketServer/Client, epoll, IPC 프로토콜 |
+| 43 | SHM Order Types | ✅ 완료 | ShmDualOrderResult POD, OrderChannel, to_shm() 변환 |
+| 44 | Order Manager Process | ⬜ 대기 | Order Manager 프로세스 |
+| 45 | Risk Manager Process | ⬜ 대기 | Risk Manager 프로세스 |
+| 46 | Monitor Process | ⬜ 대기 | Monitor 프로세스 |
+| 47 | Engine Cold Removal | ⬜ 대기 | Engine Cold Path 제거 |
+| 48 | Watchdog Full | ⬜ 대기 | Watchdog 8 프로세스 |
+| 49 | Phase 3 Integration | ⬜ 대기 | Phase 3 통합 테스트 |
 
 ---
 
@@ -532,6 +545,23 @@
     - make_default_children (5 프로세스 구성)
   - Build Verification (1개)
   - Phase 9 (Feed Handler 프로세스 분리) 100% 완료!
+- TASK_42 Unix Domain Socket IPC 완료
+  - include/arbitrage/ipc/ipc_protocol.hpp: 프레임 프로토콜 ([4B len][1B type][payload])
+    - IpcMessageType enum: 16개 메시지 타입
+    - ipc_paths: risk/monitor/order 소켓 경로
+    - encode/decode_ipc_header: big-endian 인코딩
+  - include/arbitrage/ipc/unix_socket.hpp + src/ipc/unix_socket.cpp
+    - UnixSocketServer: epoll 기반, accept/read/broadcast, 콜백
+    - UnixSocketClient: connect, send, recv 스레드, 콜백
+    - sendmsg(iovec) scatter-gather, MSG_NOSIGNAL
+  - ipc_test: 6개 UDS 테스트 + 3개 프로토콜 테스트 모두 통과
+- TASK_43 SHM Order POD Types 완료
+  - ShmSingleOrderResult: std::optional 제거, char[] 기반 POD
+  - ShmDualOrderResult: trivially_copyable, both_success/partial_fill 헬퍼
+  - OrderChannel: 양방향 SHM 큐 (request + result)
+    - create_engine_side / create_order_manager_side 팩토리
+  - to_shm(): SingleOrderResult/DualOrderResult → SHM POD 변환
+  - ipc_test: 4개 SHM Order 테스트 모두 통과
 
 ### 세션 #20 (2026-03-20)
 - TASK_37 FeederProcess 완료
