@@ -164,18 +164,20 @@ void test_shm_ipc() {
 
         size_t received = 0;
         bool ok = true;
-        int spin = 0;
 
-        while (received < num_items && spin < 5000000) {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+
+        while (received < num_items &&
+               std::chrono::steady_clock::now() < deadline) {
             Ticker t{};
             if (consumer.pop(t)) {
                 if (t.exchange != Exchange::Upbit) ok = false;
                 if (t.price != static_cast<double>(received)) ok = false;
                 if (std::strcmp(t.symbol, "KRW-XRP") != 0) ok = false;
                 received++;
-                spin = 0;
+                deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
             } else {
-                spin++;
+                std::this_thread::sleep_for(std::chrono::microseconds(10));
             }
         }
 

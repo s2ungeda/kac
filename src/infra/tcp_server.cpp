@@ -481,7 +481,13 @@ void TcpServer::io_loop() {
 
 void TcpServer::ping_loop() {
     while (running_.load(std::memory_order_acquire)) {
-        std::this_thread::sleep_for(config_.ping_interval);
+        // ping_interval을 100ms 단위로 분할하여 빠른 종료 가능
+        auto remaining = config_.ping_interval;
+        while (remaining.count() > 0 && running_.load(std::memory_order_acquire)) {
+            auto sleep_chunk = std::min(remaining, std::chrono::seconds(1));
+            std::this_thread::sleep_for(sleep_chunk);
+            remaining -= sleep_chunk;
+        }
 
         if (!running_.load(std::memory_order_acquire)) {
             break;

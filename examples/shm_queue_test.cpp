@@ -381,10 +381,12 @@ void test_fork() {
 
         size_t received = 0;
         bool order_ok = true;
-        int spin_count = 0;
-        const int max_spins = 10000000;  // 안전 장치
 
-        while (received < num_items && spin_count < max_spins) {
+        // 타임아웃 기반 대기 (spin count 대신 — WSL2 등 느린 환경 대응)
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+
+        while (received < num_items &&
+               std::chrono::steady_clock::now() < deadline) {
             Ticker t{};
             if (consumer.pop(t)) {
                 if (t.timestamp_us != static_cast<int64_t>(received)) {
@@ -394,9 +396,9 @@ void test_fork() {
                     order_ok = false;
                 }
                 received++;
-                spin_count = 0;
+                deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
             } else {
-                spin_count++;
+                std::this_thread::sleep_for(std::chrono::microseconds(10));
             }
         }
 

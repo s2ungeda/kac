@@ -465,6 +465,11 @@ Result<void> AlertService::send_slack(const Alert& alert) {
 }
 
 Result<void> AlertService::process_alert(const Alert& alert) {
+    // 모든 채널이 비활성화면 즉시 성공
+    if (!config_.telegram.enabled && !config_.discord.enabled && !config_.slack.enabled) {
+        return Ok();
+    }
+
     bool any_sent = false;
     std::string last_error;
 
