@@ -40,10 +40,13 @@
 #include "arbitrage/infra/watchdog_client.hpp"
 #include "arbitrage/common/thread_manager.hpp"
 
-// === IPC (TASK_39: SHM Consumer) ===
+// === IPC (TASK_39: SHM Consumer, TASK_47: OrderChannel + UDS) ===
 #include "arbitrage/ipc/ipc_types.hpp"
+#include "arbitrage/ipc/ipc_protocol.hpp"
 #include "arbitrage/ipc/shm_manager.hpp"
 #include "arbitrage/ipc/shm_queue.hpp"
+#include "arbitrage/ipc/order_channel.hpp"
+#include "arbitrage/ipc/unix_socket.hpp"
 
 // === Ops ===
 #include "arbitrage/ops/alert.hpp"
@@ -681,36 +684,59 @@ int main(int argc, char* argv[]) {
     });
 
     // =========================================================================
-    // 6. 주문 실행 (API 키 필요 - 없으면 모니터 전용)
+    // 6. 주문 실행
     // =========================================================================
     std::map<Exchange, std::shared_ptr<OrderClientBase>> order_clients;
     std::shared_ptr<RecoveryManager> recovery_mgr;
     std::unique_ptr<DualOrderExecutor> dual_executor;
 
-    // TODO: API 키가 설정되면 OrderClient 생성
-    // auto upbit_order = create_order_client(Exchange::Upbit, api_key, secret);
-    // order_clients[Exchange::Upbit] = upbit_order;
-    // ...
+    // Engine 모드: 주문은 OrderChannel(SHM) → order-manager 프로세스
+    // Standalone 모드: 인프로세스 DualOrderExecutor (API 키 필요)
+    OrderChannel order_channel;
+    std::unique_ptr<UnixSocketClient> monitor_client;
 
-    if (!order_clients.empty()) {
-        recovery_mgr = std::make_shared<RecoveryManager>(order_clients);
-        dual_executor = std::make_unique<DualOrderExecutor>(order_clients, recovery_mgr);
-        if (opts.dry_run) {
-            recovery_mgr->set_dry_run(true);
+    if (engine_mode) {
+        // SHM OrderChannel — Engine이 request producer
+        try {
+            order_channel = OrderChannel::create_engine_side(defaults::ORDER_QUEUE_CAPACITY);
+            if (order_channel.request_queue_valid()) {
+                logger->info("OrderChannel (SHM) initialized");
+            }
+        } catch (const std::exception& e) {
+            logger->warn("OrderChannel init failed (non-fatal): {}", e.what());
         }
-        logger->info("Order execution enabled ({} exchanges)", order_clients.size());
+
+        // Monitor UDS client
+        monitor_client = std::make_unique<UnixSocketClient>();
+        if (monitor_client->connect(ipc_paths::MONITOR_SOCKET)) {
+            monitor_client->start_recv();
+            logger->info("Connected to monitor: {}", ipc_paths::MONITOR_SOCKET);
+        } else {
+            logger->warn("Monitor not available (non-fatal)");
+        }
     } else {
-        logger->info("Monitor-only mode (no API keys configured)");
+        // Standalone: in-process executor
+        if (!order_clients.empty()) {
+            recovery_mgr = std::make_shared<RecoveryManager>(order_clients);
+            dual_executor = std::make_unique<DualOrderExecutor>(order_clients, recovery_mgr);
+            if (opts.dry_run) {
+                recovery_mgr->set_dry_run(true);
+            }
+            logger->info("Order execution enabled ({} exchanges)", order_clients.size());
+        } else {
+            logger->info("Monitor-only mode (no API keys configured)");
+        }
     }
 
     // =========================================================================
-    // 7. Cold 서비스
+    // 7. Cold 서비스 (Standalone only — Engine 모드는 별도 프로세스)
     // =========================================================================
 
     // Health Checker
     auto& health = health_checker();
     if (engine_mode) {
-        // SHM 모드: Feeder 프로세스 생존 여부 확인
+        // Engine 모드: Cold 서비스는 monitor/risk-manager 프로세스에서 실행
+        // 여기서는 Feeder 생존 체크만 등록
         for (size_t i = 0; i < 4; ++i) {
             auto& feed = shm_feeds[i];
             std::string name = std::string(exchange_name(feed.exchange)) + "_feeder";
@@ -764,57 +790,62 @@ int main(int argc, char* argv[]) {
     health.set_event_bus(event_bus);
     // on_unhealthy는 AlertService 초기화 후 설정 (아래)
 
-    // Daily Loss Limiter
+    // --- Cold 서비스 (Standalone only) ---
+    // Engine 모드: DailyLoss → risk-manager, Alert/Stats/TCP → monitor
     auto& daily_limit = daily_limiter();
-    daily_limit.set_kill_switch([&]() {
-        decision_engine.set_kill_switch(true);
-        auto stats = daily_limit.get_stats();
-        decision_engine.set_kill_switch_reason("Daily loss limit reached");
-        logger->error("KILL SWITCH: Daily loss limit reached ({:.0f} KRW)", stats.realized_pnl);
-    });
-    daily_limit.set_event_bus(event_bus);
-    daily_limit.start();
-
-    // Alert Service
-    auto& alerts = alert_service();
-    alerts.set_event_bus(event_bus);
-    alerts.start();
-
-    // EventBus 구독: 킬스위치 → 알림
-    event_bus->subscribe<events::KillSwitchActivated>(
-        [&](const events::KillSwitchActivated& e) {
-            alerts.critical("Kill Switch", e.reason);
-        });
-
-    event_bus->subscribe<events::DailyLossLimitReached>(
-        [&](const events::DailyLossLimitReached& e) {
-            alerts.warning("Daily Loss Limit",
-                "Loss: " + std::to_string(static_cast<int>(e.loss_amount)) +
-                " / Limit: " + std::to_string(static_cast<int>(e.limit)));
-        });
-
-    // HealthChecker 콜백 (AlertService 초기화 후)
-    health.on_unhealthy([&](const ComponentHealth& ch) {
-        alerts.error("Health Check", ch.name + " is unhealthy");
-        logger->error("UNHEALTHY: {}", ch.name);
-    });
-    health.start_periodic_check(std::chrono::seconds(30));
-
-    event_bus->subscribe<events::ExchangeDisconnected>(
-        [&](const events::ExchangeDisconnected& e) {
-            alerts.error("Exchange Disconnected",
-                std::string(exchange_name(e.exchange)) + ": " + e.reason);
-        });
-
-    // Trading Stats
     auto& stats = trading_stats();
-    event_bus->subscribe<events::DualOrderCompleted>(
-        [&](const events::DualOrderCompleted& e) {
-            stats.record_trade(e.actual_profit);
+    if (!engine_mode) {
+        // Daily Loss Limiter
+        daily_limit.set_kill_switch([&]() {
+            decision_engine.set_kill_switch(true);
+            auto st = daily_limit.get_stats();
+            decision_engine.set_kill_switch_reason("Daily loss limit reached");
+            logger->error("KILL SWITCH: Daily loss limit reached ({:.0f} KRW)", st.realized_pnl);
         });
-    stats.start();
+        daily_limit.set_event_bus(event_bus);
+        daily_limit.start();
 
-    // Config Watcher
+        // Alert Service
+        auto& alerts = alert_service();
+        alerts.set_event_bus(event_bus);
+        alerts.start();
+
+        // EventBus 구독
+        event_bus->subscribe<events::KillSwitchActivated>(
+            [&](const events::KillSwitchActivated& e) {
+                alerts.critical("Kill Switch", e.reason);
+            });
+
+        event_bus->subscribe<events::DailyLossLimitReached>(
+            [&](const events::DailyLossLimitReached& e) {
+                alerts.warning("Daily Loss Limit",
+                    "Loss: " + std::to_string(static_cast<int>(e.loss_amount)) +
+                    " / Limit: " + std::to_string(static_cast<int>(e.limit)));
+            });
+
+        health.on_unhealthy([&](const ComponentHealth& ch) {
+            alerts.error("Health Check", ch.name + " is unhealthy");
+            logger->error("UNHEALTHY: {}", ch.name);
+        });
+        health.start_periodic_check(std::chrono::seconds(30));
+
+        event_bus->subscribe<events::ExchangeDisconnected>(
+            [&](const events::ExchangeDisconnected& e) {
+                alerts.error("Exchange Disconnected",
+                    std::string(exchange_name(e.exchange)) + ": " + e.reason);
+            });
+
+        // Trading Stats
+        event_bus->subscribe<events::DualOrderCompleted>(
+            [&](const events::DualOrderCompleted& e) {
+                stats.record_trade(e.actual_profit);
+            });
+        stats.start();
+    } else {
+        logger->info("Engine mode: Cold services delegated to monitor/risk-manager");
+    }
+
+    // Config Watcher (both modes)
     auto config_watcher = std::make_unique<ConfigWatcher>(
         opts.config_path, std::chrono::milliseconds(5000));
     config_watcher->on_reload([&]() {
@@ -826,16 +857,19 @@ int main(int argc, char* argv[]) {
     });
     config_watcher->start();
 
-    // TCP Server
-    TcpServerConfig tcp_config;
-    tcp_config.port = 9090;
-    auto tcp_server = std::make_unique<TcpServer>(tcp_config);
-    tcp_server->set_event_bus(event_bus);
-    auto tcp_result = tcp_server->start();
-    if (tcp_result) {
-        logger->info("TCP server started on port {}", tcp_config.port);
-    } else {
-        logger->warn("TCP server failed to start (non-fatal)");
+    // TCP Server (Standalone only — Engine 모드는 monitor 프로세스)
+    std::unique_ptr<TcpServer> tcp_server;
+    if (!engine_mode) {
+        TcpServerConfig tcp_config;
+        tcp_config.port = 9090;
+        tcp_server = std::make_unique<TcpServer>(tcp_config);
+        tcp_server->set_event_bus(event_bus);
+        auto tcp_result = tcp_server->start();
+        if (tcp_result) {
+            logger->info("TCP server started on port {}", tcp_config.port);
+        } else {
+            logger->warn("TCP server failed to start (non-fatal)");
+        }
     }
 
     // Watchdog Client
@@ -947,25 +981,34 @@ int main(int argc, char* argv[]) {
         }
     }, ShutdownPriority::Strategy, std::chrono::seconds(1));
 
-    shutdown_mgr.register_component("health_checker", [&] {
-        health.stop();
-    }, ShutdownPriority::Storage, std::chrono::seconds(2));
+    if (!engine_mode) {
+        shutdown_mgr.register_component("health_checker", [&] {
+            health.stop();
+        }, ShutdownPriority::Storage, std::chrono::seconds(2));
 
-    shutdown_mgr.register_component("daily_limiter", [&] {
-        daily_limit.stop();
-    }, ShutdownPriority::Storage, std::chrono::seconds(2));
+        shutdown_mgr.register_component("daily_limiter", [&] {
+            daily_limit.stop();
+        }, ShutdownPriority::Storage, std::chrono::seconds(2));
 
-    shutdown_mgr.register_component("trading_stats", [&] {
-        stats.save();
-        stats.stop();
-    }, ShutdownPriority::Storage, std::chrono::seconds(3));
+        shutdown_mgr.register_component("trading_stats", [&] {
+            stats.save();
+            stats.stop();
+        }, ShutdownPriority::Storage, std::chrono::seconds(3));
 
-    shutdown_mgr.register_component("alert_service", [&] {
-        try {
-            std::thread([&] { alerts.stop(); }).detach();
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        } catch (...) {}
-    }, ShutdownPriority::Logging, std::chrono::seconds(1));
+        shutdown_mgr.register_component("alert_service", [&] {
+            try {
+                auto& al = alert_service();
+                std::thread([&al] { al.stop(); }).detach();
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            } catch (...) {}
+        }, ShutdownPriority::Logging, std::chrono::seconds(1));
+    }
+
+    if (engine_mode && monitor_client) {
+        shutdown_mgr.register_component("monitor_client", [&] {
+            monitor_client->disconnect();
+        }, ShutdownPriority::Logging, std::chrono::seconds(1));
+    }
 
     shutdown_mgr.register_component("event_bus", [&] {
         try {
@@ -1055,14 +1098,17 @@ int main(int argc, char* argv[]) {
         logger->info("Order thread started");
     }
 
-    // Display Thread (Cold)
-    std::thread display_thread(display_thread_func,
-        std::ref(calculator),
-        std::ref(price_upbit), std::ref(price_bithumb),
-        std::ref(price_binance), std::ref(price_mexc),
-        std::ref(current_fx_rate),
-        std::ref(cv_mutex), std::ref(cv_shutdown),
-        std::ref(running));
+    // Display Thread (Standalone only — Engine 모드는 monitor 프로세스)
+    std::thread display_thread;
+    if (!engine_mode) {
+        display_thread = std::thread(display_thread_func,
+            std::ref(calculator),
+            std::ref(price_upbit), std::ref(price_bithumb),
+            std::ref(price_binance), std::ref(price_mexc),
+            std::ref(current_fx_rate),
+            std::ref(cv_mutex), std::ref(cv_shutdown),
+            std::ref(running));
+    }
 
     // FX Rate Thread (Cold)
     std::thread fx_thread(fx_rate_thread_func,

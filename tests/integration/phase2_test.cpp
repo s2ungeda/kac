@@ -460,7 +460,8 @@ void test_watchdog_ordered_launch() {
 void test_make_default_children() {
     auto children = Watchdog::make_default_children("./build/bin", {"--dry-run"});
 
-    ASSERT_EQ(children.size(), static_cast<size_t>(5));
+    // TASK_48: 8 프로세스 (4 feeder + engine + order-manager + risk-manager + monitor)
+    ASSERT_EQ(children.size(), static_cast<size_t>(8));
 
     // 처음 4개: Feeder (start_order=0)
     for (int i = 0; i < 4; ++i) {
@@ -468,12 +469,11 @@ void test_make_default_children() {
         ASSERT_TRUE(children[i].critical);
     }
 
-    // 마지막: Engine (start_order=1)
+    // Engine (start_order=1)
     ASSERT_EQ(children[4].name, std::string("arb-engine"));
     ASSERT_EQ(children[4].start_order, 1);
     ASSERT_EQ(children[4].start_delay_ms, 1000);
 
-    // Engine에 --engine, --dry-run 인자 있는지 확인
     auto& args = children[4].arguments;
     bool has_engine = false, has_dry_run = false;
     for (const auto& arg : args) {
@@ -482,6 +482,14 @@ void test_make_default_children() {
     }
     ASSERT_TRUE(has_engine);
     ASSERT_TRUE(has_dry_run);
+
+    // Cold path (start_order=2~3)
+    ASSERT_EQ(children[5].name, std::string("order-manager"));
+    ASSERT_EQ(children[5].start_order, 2);
+    ASSERT_EQ(children[6].name, std::string("risk-manager"));
+    ASSERT_EQ(children[6].start_order, 2);
+    ASSERT_EQ(children[7].name, std::string("monitor"));
+    ASSERT_EQ(children[7].start_order, 3);
 }
 
 // =============================================================================

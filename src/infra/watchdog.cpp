@@ -1149,8 +1149,43 @@ std::vector<ChildProcessConfig> Watchdog::make_default_children(
     engine_cfg.max_restarts = 10;
     engine_cfg.critical = true;
     engine_cfg.start_order = 1;
-    engine_cfg.start_delay_ms = 1000;  // Feeder SHM 준비 대기
+    engine_cfg.start_delay_ms = 1000;
     children.push_back(engine_cfg);
+
+    // TASK_48: Cold Path 프로세스 (start_order=2~3)
+
+    // Order Manager (start_order=2)
+    ChildProcessConfig om_cfg;
+    om_cfg.name = "order-manager";
+    om_cfg.executable = bin_dir + "/order-manager";
+    om_cfg.restart_delay_ms = 2000;
+    om_cfg.max_restarts = 10;
+    om_cfg.critical = true;
+    om_cfg.start_order = 2;
+    om_cfg.start_delay_ms = 500;
+    children.push_back(om_cfg);
+
+    // Risk Manager (start_order=2, order-manager와 병렬)
+    ChildProcessConfig rm_cfg;
+    rm_cfg.name = "risk-manager";
+    rm_cfg.executable = bin_dir + "/risk-manager";
+    rm_cfg.restart_delay_ms = 2000;
+    rm_cfg.max_restarts = 10;
+    rm_cfg.critical = false;  // 리스크 매니저 없어도 엔진 실행 가능
+    rm_cfg.start_order = 2;
+    rm_cfg.start_delay_ms = 0;
+    children.push_back(rm_cfg);
+
+    // Monitor (start_order=3, 마지막)
+    ChildProcessConfig mon_cfg;
+    mon_cfg.name = "monitor";
+    mon_cfg.executable = bin_dir + "/monitor";
+    mon_cfg.restart_delay_ms = 2000;
+    mon_cfg.max_restarts = 10;
+    mon_cfg.critical = false;
+    mon_cfg.start_order = 3;
+    mon_cfg.start_delay_ms = 500;
+    children.push_back(mon_cfg);
 
     return children;
 }

@@ -69,9 +69,9 @@
 | 44 | Order Manager Process | ✅ 완료 | SHM OrderChannel → DualOrderExecutor → result SHM + UDS risk |
 | 45 | Risk Manager Process | ✅ 완료 | UDS 서버, DailyLossLimiter, 킬스위치, 거래 결과 수신 |
 | 46 | Monitor Process | ✅ 완료 | UDS 서버, AlertService, TradingStats, TcpServer, HealthChecker |
-| 47 | Engine Cold Removal | ⬜ 대기 | Engine Cold Path 제거 |
-| 48 | Watchdog Full | ⬜ 대기 | Watchdog 8 프로세스 |
-| 49 | Phase 3 Integration | ⬜ 대기 | Phase 3 통합 테스트 |
+| 47 | Engine Cold Removal | ✅ 완료 | --engine 모드 Cold 서비스 제거 + IPC 클라이언트 추가 |
+| 48 | Watchdog Full | ✅ 완료 | 8 프로세스 오케스트레이션 (feeder×4 + engine + order + risk + monitor) |
+| 49 | Phase 3 Integration | ✅ 완료 | 전체 테스트 통과 (phase2+ipc+watchdog+integration) |
 
 ---
 
@@ -574,6 +574,22 @@
   - MonitorProcess: UDS 서버 + TcpServer + AlertService + TradingStats + HealthChecker
   - IPC 메시지 타입별 처리 (OrderResult, KillSwitch, HealthPing 등)
   - monitor 실행 파일 (CLI: --tcp-port, --socket 등)
+- TASK_47 Engine Cold Removal 완료
+  - --engine 모드: Cold 서비스 (Alert, Health, Stats, TCP, DailyLimit, Display) 비활성화
+  - OrderChannel SHM 생성 (Engine → OrderManager 주문 전달)
+  - UDS monitor_client 연결 (이벤트 전송)
+  - --standalone 모드 완전 보존
+- TASK_48 Watchdog Full (8 프로세스) 완료
+  - make_default_children: 8개 프로세스 (4 feeder + engine + order + risk + monitor)
+  - 시작 순서: feeder(0) → engine(1) → order+risk(2) → monitor(3)
+  - 종료 순서: 역순
+- TASK_49 Phase 3 Integration Test 완료
+  - phase2_test 10/10 통과
+  - ipc_test 13/13 통과
+  - watchdog_test 32/32 통과
+  - integration_test 6/6 통과
+  - 8개 바이너리 모두 빌드 성공
+  - Phase 10 (Cold Path 프로세스 분리) 100% 완료!
 
 ### 세션 #20 (2026-03-20)
 - TASK_37 FeederProcess 완료
