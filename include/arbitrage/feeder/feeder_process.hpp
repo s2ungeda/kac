@@ -9,7 +9,8 @@
 
 #include "arbitrage/common/types.hpp"
 #include "arbitrage/common/logger.hpp"
-#include "arbitrage/ipc/shm_queue.hpp"
+#include "arbitrage/ipc/shm_ring_buffer.hpp"
+#include "arbitrage/ipc/shm_latest.hpp"
 #include "arbitrage/ipc/shm_manager.hpp"
 #include "arbitrage/ipc/ipc_types.hpp"
 
@@ -31,9 +32,12 @@ struct WebSocketEvent;
 struct FeederConfig {
     Exchange exchange{Exchange::Upbit};
 
-    // SHM
+    // SHM — Ticker
     std::string shm_name;              // 기본값: shm_names::feed_name(exchange)
     size_t shm_capacity{4096};         // 큐 용량 (power of 2)
+
+    // SHM — OrderBook (단일 슬롯, 큐 아님)
+    std::string shm_ob_name;           // 기본값: shm_names::ob_name(exchange)
 
     // WebSocket
     std::string ws_host;               // 거래소별 기본값
@@ -55,6 +59,9 @@ struct FeederStats {
     std::atomic<uint64_t> ticks_received{0};
     std::atomic<uint64_t> ticks_pushed{0};
     std::atomic<uint64_t> ticks_dropped{0};       // 큐 full로 드롭된 수
+    std::atomic<uint64_t> ob_received{0};          // 호가 수신 수
+    std::atomic<uint64_t> ob_pushed{0};            // 호가 SHM push 수
+    std::atomic<uint64_t> ob_dropped{0};           // 호가 큐 full 드롭 수
     std::atomic<uint64_t> ws_reconnects{0};
     std::atomic<uint64_t> ws_errors{0};
     std::chrono::steady_clock::time_point started_at;
@@ -120,9 +127,13 @@ private:
     FeederStats stats_;
     std::atomic<bool> running_{false};
 
-    // SHM
+    // SHM — Ticker (덮어쓰기 링버퍼)
     std::unique_ptr<ShmSegment> shm_segment_;
-    ShmSPSCQueue<Ticker> shm_queue_;
+    ShmRingBuffer<Ticker> shm_queue_;
+
+    // SHM — OrderBook (최신 값만 유지)
+    std::unique_ptr<ShmSegment> shm_ob_segment_;
+    ShmLatestValue<OrderBook> shm_ob_slot_;
 
     // Logger
     std::shared_ptr<SimpleLogger> logger_;

@@ -55,11 +55,18 @@ FeederProcess::~FeederProcess() {
 // 거래소별 기본값 적용
 // =============================================================================
 void FeederProcess::apply_exchange_defaults() {
-    // SHM 이름 기본값
+    // SHM 이름 기본값 (Ticker)
     if (config_.shm_name.empty()) {
         const char* name = shm_names::feed_name(config_.exchange);
         if (name) config_.shm_name = name;
         else config_.shm_name = "/kimchi_feed_unknown";
+    }
+
+    // SHM 이름 기본값 (OrderBook)
+    if (config_.shm_ob_name.empty()) {
+        const char* name = shm_names::ob_name(config_.exchange);
+        if (name) config_.shm_ob_name = name;
+        else config_.shm_ob_name = "/kimchi_ob_unknown";
     }
 
     // WebSocket 연결 정보 기본값
@@ -102,23 +109,43 @@ void FeederProcess::apply_exchange_defaults() {
 // SHM 초기화
 // =============================================================================
 void FeederProcess::init_shm() {
+    // Ticker SHM (덮어쓰기 링버퍼 — 오래된 데이터 자동 폐기)
     size_t shm_size = shm_queue_size(config_.shm_capacity, sizeof(Ticker));
 
-    logger_->info("Creating SHM: {} ({} bytes, capacity={})",
+    logger_->info("Creating Ticker RingBuffer SHM: {} ({} bytes, capacity={})",
                   config_.shm_name, shm_size, config_.shm_capacity);
 
     shm_segment_ = std::make_unique<ShmSegment>(
         config_.shm_name, shm_size, true);
 
-    shm_queue_ = ShmSPSCQueue<Ticker>::init_producer(
+    shm_queue_ = ShmRingBuffer<Ticker>::init_producer(
         shm_segment_->data(), config_.shm_capacity);
 
     if (!shm_queue_.valid()) {
-        throw std::runtime_error("Failed to init SHM SPSC queue: " + config_.shm_name);
+        throw std::runtime_error("Failed to init Ticker RingBuffer: " + config_.shm_name);
     }
 
-    logger_->info("SHM queue ready: {} (pid={})",
+    logger_->info("Ticker RingBuffer ready: {} (pid={})",
                   config_.shm_name, shm_queue_.producer_pid());
+
+    // OrderBook SHM (최신 값만 유지 — seqlock 기반)
+    size_t ob_shm_size = shm_latest_size<OrderBook>();
+
+    logger_->info("Creating OrderBook SHM slot: {} ({} bytes)",
+                  config_.shm_ob_name, ob_shm_size);
+
+    shm_ob_segment_ = std::make_unique<ShmSegment>(
+        config_.shm_ob_name, ob_shm_size, true);
+
+    shm_ob_slot_ = ShmLatestValue<OrderBook>::init_producer(
+        shm_ob_segment_->data(), 0);
+
+    if (!shm_ob_slot_.valid()) {
+        throw std::runtime_error("Failed to init OrderBook SHM slot: " + config_.shm_ob_name);
+    }
+
+    logger_->info("OrderBook SHM slot ready: {} (pid={})",
+                  config_.shm_ob_name, shm_ob_slot_.producer_pid());
 }
 
 // =============================================================================
@@ -149,29 +176,42 @@ void FeederProcess::subscribe_symbols(std::shared_ptr<WebSocketClientBase>& ws) 
     switch (config_.exchange) {
         case Exchange::Upbit: {
             auto upbit = std::dynamic_pointer_cast<UpbitWebSocket>(ws);
-            if (upbit) upbit->subscribe_trade(config_.symbols);
+            if (upbit) {
+                upbit->subscribe_trade(config_.symbols);
+                upbit->subscribe_orderbook(config_.symbols);
+            }
             break;
         }
         case Exchange::Bithumb: {
             auto bithumb = std::dynamic_pointer_cast<BithumbWebSocket>(ws);
-            if (bithumb) bithumb->subscribe_trade(config_.symbols);
+            if (bithumb) {
+                bithumb->subscribe_trade(config_.symbols);
+                bithumb->subscribe_orderbook(config_.symbols);
+            }
             break;
         }
         case Exchange::Binance: {
             auto binance = std::dynamic_pointer_cast<BinanceWebSocket>(ws);
-            if (binance) binance->subscribe_trade(config_.symbols);
+            if (binance) {
+                binance->subscribe_trade(config_.symbols);
+                binance->subscribe_orderbook(config_.symbols, 10);
+            }
 
-            // Binance: target에 stream 파라미터 포함
+            // Binance: target에 stream 파라미터 포함 (trade + depth)
             if (config_.ws_target.empty() && !config_.symbols.empty()) {
                 std::string sym = config_.symbols[0];
                 std::transform(sym.begin(), sym.end(), sym.begin(), ::tolower);
-                config_.ws_target = "/stream?streams=" + sym + "@aggTrade";
+                config_.ws_target = "/stream?streams=" + sym + "@aggTrade/"
+                                  + sym + "@depth10";
             }
             break;
         }
         case Exchange::MEXC: {
             auto mexc = std::dynamic_pointer_cast<MEXCWebSocket>(ws);
-            if (mexc) mexc->subscribe_trade(config_.symbols);
+            if (mexc) {
+                mexc->subscribe_trade(config_.symbols);
+                mexc->subscribe_orderbook(config_.symbols);
+            }
             break;
         }
         default:
@@ -188,16 +228,17 @@ void FeederProcess::on_event(const WebSocketEvent& evt) {
 
         const Ticker& ticker = evt.ticker();
 
-        if (shm_queue_.push(ticker)) {
-            stats_.ticks_pushed.fetch_add(1, std::memory_order_relaxed);
-        } else {
-            stats_.ticks_dropped.fetch_add(1, std::memory_order_relaxed);
-            // 큐가 가득 찬 경우 — Consumer가 느림
-            if (config_.verbose) {
-                logger_->warn("SHM queue full, tick dropped (price={:.4f})",
-                              ticker.price);
-            }
-        }
+        // 링버퍼: 항상 성공, 오래된 데이터 자동 폐기
+        shm_queue_.push(ticker);
+        stats_.ticks_pushed.fetch_add(1, std::memory_order_relaxed);
+    } else if (evt.is_orderbook()) {
+        stats_.ob_received.fetch_add(1, std::memory_order_relaxed);
+
+        const OrderBook& ob = evt.orderbook();
+
+        // 최신 값 덮어쓰기 (seqlock)
+        shm_ob_slot_.store(ob);
+        stats_.ob_pushed.fetch_add(1, std::memory_order_relaxed);
     } else if (evt.type == WebSocketEvent::Type::Connected) {
         logger_->info("WebSocket connected to {}",
                       exchange_name(config_.exchange));
@@ -299,12 +340,14 @@ int FeederProcess::run() {
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::steady_clock::now() - stats_.started_at).count();
 
-            logger_->info("{} feeder: {} ticks, {} pushed, {} dropped, "
-                          "{} reconnects (uptime={}s)",
+            logger_->info("{} feeder: ticks={}/{} ob={}/{} dropped={}/{} reconnects={} ({}s)",
                 exchange_name(config_.exchange),
                 stats_.ticks_received.load(std::memory_order_relaxed),
                 stats_.ticks_pushed.load(std::memory_order_relaxed),
+                stats_.ob_received.load(std::memory_order_relaxed),
+                stats_.ob_pushed.load(std::memory_order_relaxed),
                 stats_.ticks_dropped.load(std::memory_order_relaxed),
+                stats_.ob_dropped.load(std::memory_order_relaxed),
                 stats_.ws_reconnects.load(std::memory_order_relaxed),
                 elapsed);
         }
@@ -320,17 +363,19 @@ int FeederProcess::run() {
         io_thread.join();
     }
 
-    // SHM 큐 close
+    // SHM close
     shm_queue_.close();
+    shm_ob_slot_.close();
 
     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::steady_clock::now() - stats_.started_at).count();
 
-    logger_->info("{} feeder stopped: {} ticks, {} pushed, {} dropped ({}s)",
+    logger_->info("{} feeder stopped: ticks={}/{} ob={}/{} ({}s)",
         exchange_name(config_.exchange),
         stats_.ticks_received.load(),
         stats_.ticks_pushed.load(),
-        stats_.ticks_dropped.load(),
+        stats_.ob_received.load(),
+        stats_.ob_pushed.load(),
         elapsed);
 
     return 0;

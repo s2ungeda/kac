@@ -21,6 +21,10 @@ namespace shm_names {
     constexpr const char* FEED_BITHUMB  = "/kimchi_feed_bithumb";
     constexpr const char* FEED_BINANCE  = "/kimchi_feed_binance";
     constexpr const char* FEED_MEXC     = "/kimchi_feed_mexc";
+    constexpr const char* OB_UPBIT      = "/kimchi_ob_upbit";
+    constexpr const char* OB_BITHUMB    = "/kimchi_ob_bithumb";
+    constexpr const char* OB_BINANCE    = "/kimchi_ob_binance";
+    constexpr const char* OB_MEXC       = "/kimchi_ob_mexc";
     constexpr const char* ORDERS        = "/kimchi_orders";
     constexpr const char* ORDER_RESULTS = "/kimchi_order_results";
 
@@ -30,6 +34,16 @@ namespace shm_names {
             case Exchange::Bithumb: return FEED_BITHUMB;
             case Exchange::Binance: return FEED_BINANCE;
             case Exchange::MEXC:    return FEED_MEXC;
+            default:                return nullptr;
+        }
+    }
+
+    inline const char* ob_name(Exchange ex) {
+        switch (ex) {
+            case Exchange::Upbit:   return OB_UPBIT;
+            case Exchange::Bithumb: return OB_BITHUMB;
+            case Exchange::Binance: return OB_BINANCE;
+            case Exchange::MEXC:    return OB_MEXC;
             default:                return nullptr;
         }
     }

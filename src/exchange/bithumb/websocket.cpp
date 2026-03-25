@@ -52,13 +52,13 @@ std::string BithumbWebSocket::convert_to_v2_code(const std::string& symbol) {
 }
 
 std::string BithumbWebSocket::build_subscribe_message() {
-    // 빗썸 v2 API 형식: [ticket, type, format]
+    // 빗썸 v2 API 형식: [ticket, type1, type2, ..., format]
     nlohmann::json msg = nlohmann::json::array();
 
     // Ticket field
     msg.push_back({{"ticket", "arbitrage-cpp"}});
 
-    // Type field - trade 우선
+    // Trade 구독
     if (!trade_codes_.empty()) {
         nlohmann::json codes = nlohmann::json::array();
         for (size_t i = 0; i < trade_codes_.size(); ++i) {
@@ -69,7 +69,10 @@ std::string BithumbWebSocket::build_subscribe_message() {
             {"codes", codes},
             {"isOnlyRealtime", true}
         });
-    } else if (!ticker_codes_.empty()) {
+    }
+
+    // Ticker 구독
+    if (!ticker_codes_.empty()) {
         nlohmann::json codes = nlohmann::json::array();
         for (size_t i = 0; i < ticker_codes_.size(); ++i) {
             codes.push_back(ticker_codes_.get(i));
@@ -79,7 +82,10 @@ std::string BithumbWebSocket::build_subscribe_message() {
             {"codes", codes},
             {"isOnlyRealtime", true}
         });
-    } else if (!orderbook_codes_.empty()) {
+    }
+
+    // OrderBook 구독
+    if (!orderbook_codes_.empty()) {
         nlohmann::json codes = nlohmann::json::array();
         for (size_t i = 0; i < orderbook_codes_.size(); ++i) {
             codes.push_back(orderbook_codes_.get(i));
@@ -256,7 +262,7 @@ void BithumbWebSocket::parse_orderbook_v2(const nlohmann::json& json) {
         now.time_since_epoch()).count();
 
     if (orderbook.bid_count > 0 && orderbook.ask_count > 0) {
-        logger_->debug("[Bithumb] OrderBook - Best Bid: {}, Best Ask: {}",
+        logger_->info("[Bithumb] OrderBook - Best Bid: {}, Best Ask: {}",
                       orderbook.bids[0].price, orderbook.asks[0].price);
     }
 

@@ -178,8 +178,14 @@ void BinanceWebSocket::parse_orderbook(const nlohmann::json& data, const std::st
             now.time_since_epoch()).count();
     }
     
+    if (orderbook.bid_count > 0 && orderbook.ask_count > 0) {
+        logger_->info("[Binance] OrderBook - Symbol: {}, Bids: {}, Asks: {}, BestBid: {}, BestAsk: {}",
+                      orderbook.symbol, orderbook.bid_count, orderbook.ask_count,
+                      orderbook.best_bid(), orderbook.best_ask());
+    }
+
     WebSocketEvent evt(WebSocketEvent::Type::OrderBook, Exchange::Binance, orderbook);
-    
+
     emit_event(std::move(evt));
 }
 

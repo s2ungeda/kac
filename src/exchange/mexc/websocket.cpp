@@ -312,7 +312,7 @@ void MEXCWebSocket::parse_depth(const nlohmann::json& json) {
             now.time_since_epoch()).count();
 
         if (orderbook.bid_count > 0 && orderbook.ask_count > 0) {
-            logger_->debug("[MEXC] Depth - Best Bid: {}, Best Ask: {}",
+            logger_->info("[MEXC] Depth - Best Bid: {}, Best Ask: {}",
                           orderbook.bids[0].price, orderbook.asks[0].price);
         }
 

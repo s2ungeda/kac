@@ -335,6 +335,28 @@ target_link_libraries(shm_queue_test
         rt
 )
 
+# ShmRingBuffer + ShmLatestValue 단위 테스트
+add_executable(shm_ringbuffer_test shm_ringbuffer_test.cpp)
+
+target_link_libraries(shm_ringbuffer_test
+    PRIVATE
+        common
+        ipc
+        Threads::Threads
+        rt
+)
+
+# SHM Reader — Ticker + OrderBook 진단 도구
+add_executable(shm_reader shm_reader.cpp)
+
+target_link_libraries(shm_reader
+    PRIVATE
+        common
+        ipc
+        Threads::Threads
+        rt
+)
+
 # Feeder Process Test (TASK_37)
 add_executable(feeder_test feeder_test.cpp)
 

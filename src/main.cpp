@@ -24,6 +24,7 @@
 #include "arbitrage/strategy/premium_calc.hpp"
 #include "arbitrage/strategy/decision_engine.hpp"
 #include "arbitrage/strategy/risk_model.hpp"
+#include "arbitrage/strategy/orderbook_analyzer.hpp"
 
 // === Executor ===
 #include "arbitrage/executor/dual_order.hpp"
@@ -43,6 +44,8 @@
 #include "arbitrage/ipc/ipc_protocol.hpp"
 #include "arbitrage/ipc/shm_manager.hpp"
 #include "arbitrage/ipc/shm_queue.hpp"
+#include "arbitrage/ipc/shm_ring_buffer.hpp"
+#include "arbitrage/ipc/shm_latest.hpp"
 #include "arbitrage/ipc/order_channel.hpp"
 #include "arbitrage/ipc/unix_socket.hpp"
 
@@ -268,7 +271,9 @@ void hot_thread_func(
 struct ShmFeedQueue {
     Exchange exchange;
     std::unique_ptr<ShmSegment> segment;
-    ShmSPSCQueue<Ticker> queue;
+    ShmRingBuffer<Ticker> queue;
+    std::unique_ptr<ShmSegment> ob_segment;
+    ShmLatestValue<OrderBook> ob_slot;
 };
 
 void hot_thread_shm_func(
@@ -277,6 +282,7 @@ void hot_thread_shm_func(
     DecisionEngine& engine,
     SPSCQueue<DualOrderRequest>& order_queue,
     std::shared_ptr<EventBus> event_bus,
+    OrderBookAnalyzer& ob_analyzer,
     std::atomic<double>& price_upbit,
     std::atomic<double>& price_bithumb,
     std::atomic<double>& price_binance,
@@ -299,7 +305,9 @@ void hot_thread_shm_func(
 
     AdaptiveSpinWait waiter;
     Ticker ticker;
+    OrderBook orderbook;
     uint64_t tick_count = 0;
+    uint64_t ob_count = 0;
     uint64_t eval_count = 0;
 
     while (running.load(std::memory_order_relaxed)) {
@@ -307,6 +315,7 @@ void hot_thread_shm_func(
 
         // 4개 SHM 큐 라운드로빈 폴링
         for (auto& feed : shm_feeds) {
+            // Ticker 큐
             while (feed.queue.pop(ticker)) {
                 had_work = true;
                 tick_count++;
@@ -325,6 +334,13 @@ void hot_thread_shm_func(
                     case Exchange::MEXC:    price_mexc.store(price, std::memory_order_relaxed); break;
                     default: break;
                 }
+            }
+
+            // OrderBook — 최신 값 읽기 (seqlock)
+            if (feed.ob_slot.load(orderbook)) {
+                had_work = true;
+                ob_count++;
+                ob_analyzer.update(feed.exchange, orderbook);
             }
 
             // Feeder 프로세스 종료 감지
@@ -370,7 +386,8 @@ void hot_thread_shm_func(
         }
     }
 
-    logger->info("Hot thread (SHM) stopped: {} ticks, {} evaluations", tick_count, eval_count);
+    logger->info("Hot thread (SHM) stopped: {} ticks, {} orderbooks, {} evaluations",
+                 tick_count, ob_count, eval_count);
 }
 
 // =============================================================================
@@ -583,6 +600,9 @@ int main(int argc, char* argv[]) {
     // Fee Calculator
     auto& fee_calc = fee_calculator();
 
+    // OrderBook Analyzer
+    OrderBookAnalyzer ob_analyzer(&fee_calc);
+
     // Risk Model
     RiskModel risk_model;
     risk_model.set_fee_calculator(&fee_calc);
@@ -618,6 +638,8 @@ int main(int argc, char* argv[]) {
     constexpr size_t SHM_SIZE = shm_queue_size(SHM_CAPACITY, sizeof(Ticker));
 
     std::array<ShmFeedQueue, 4> shm_feeds;
+    const size_t OB_SHM_SIZE = shm_latest_size<OrderBook>();
+
     if (engine_mode) {
         const Exchange exchanges[] = {
             Exchange::Upbit, Exchange::Bithumb, Exchange::Binance, Exchange::MEXC
@@ -625,27 +647,50 @@ int main(int argc, char* argv[]) {
         for (size_t i = 0; i < 4; ++i) {
             Exchange ex = exchanges[i];
             const char* name = shm_names::feed_name(ex);
+            const char* ob_name = shm_names::ob_name(ex);
             shm_feeds[i].exchange = ex;
+
+            // Ticker SHM (RingBuffer)
             try {
                 shm_feeds[i].segment = std::make_unique<ShmSegment>(name, SHM_SIZE, false);
             } catch (const std::runtime_error& e) {
-                logger->error("Failed to attach SHM queue: {} — is {}-feeder running? ({})",
+                logger->error("Failed to attach SHM: {} — is {}-feeder running? ({})",
                     name, exchange_name(ex), e.what());
                 std::cerr << "ERROR: Cannot attach to " << name
                           << ". Start " << exchange_name(ex) << "-feeder first.\n";
                 return 1;
             }
-            shm_feeds[i].queue = ShmSPSCQueue<Ticker>::attach_consumer(
+            shm_feeds[i].queue = ShmRingBuffer<Ticker>::attach_consumer(
                 shm_feeds[i].segment->data());
             if (!shm_feeds[i].queue.valid()) {
-                logger->error("Invalid SHM queue: {} — check version/type mismatch", name);
-                std::cerr << "ERROR: SHM queue " << name << " is invalid.\n";
+                logger->error("Invalid SHM RingBuffer: {} — check version/type mismatch", name);
+                std::cerr << "ERROR: SHM " << name << " is invalid.\n";
                 return 1;
             }
-            logger->info("SHM attached: {} (capacity={}, producer={})",
+            logger->info("Ticker RingBuffer attached: {} (capacity={}, producer={})",
                 name, shm_feeds[i].queue.capacity(), shm_feeds[i].queue.producer_pid());
+
+            // OrderBook SHM (LatestValue)
+            try {
+                shm_feeds[i].ob_segment = std::make_unique<ShmSegment>(ob_name, OB_SHM_SIZE, false);
+            } catch (const std::runtime_error& e) {
+                logger->error("Failed to attach OrderBook SHM: {} — is {}-feeder running? ({})",
+                    ob_name, exchange_name(ex), e.what());
+                std::cerr << "ERROR: Cannot attach to " << ob_name
+                          << ". Start " << exchange_name(ex) << "-feeder first.\n";
+                return 1;
+            }
+            shm_feeds[i].ob_slot = ShmLatestValue<OrderBook>::attach_consumer(
+                shm_feeds[i].ob_segment->data());
+            if (!shm_feeds[i].ob_slot.valid()) {
+                logger->error("Invalid OrderBook SHM: {} — check version/type mismatch", ob_name);
+                std::cerr << "ERROR: OrderBook SHM " << ob_name << " is invalid.\n";
+                return 1;
+            }
+            logger->info("OrderBook SHM slot attached: {} (producer={})",
+                ob_name, shm_feeds[i].ob_slot.producer_pid());
         }
-        logger->info("SHM mode: 4 feed queues attached");
+        logger->info("SHM mode: 4 feed queues + orderbook queues attached");
     }
 
     // =========================================================================
@@ -1066,11 +1111,11 @@ int main(int argc, char* argv[]) {
     // Hot Thread (Core-Pinned, Busy-Poll)
     std::thread hot_thread;
     if (engine_mode) {
-        // SHM 모드: 4개 SHM 큐에서 Ticker 소비
+        // SHM 모드: 4개 SHM 큐에서 Ticker + OrderBook 소비
         hot_thread = std::thread(hot_thread_shm_func,
             std::ref(shm_feeds), std::ref(calculator),
             std::ref(decision_engine), std::ref(order_queue),
-            event_bus,
+            event_bus, std::ref(ob_analyzer),
             std::ref(price_upbit), std::ref(price_bithumb),
             std::ref(price_binance), std::ref(price_mexc),
             logger, has_executor, std::ref(running));

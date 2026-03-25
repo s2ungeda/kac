@@ -182,7 +182,7 @@ void UpbitWebSocket::parse_orderbook(const nlohmann::json& data) {
     int64_t timestamp_ms = data["timestamp"];
     orderbook.timestamp_us = timestamp_ms * 1000;
 
-    logger_->debug("[Upbit] OrderBook - Symbol: {}, Bids: {}, Asks: {}, BestBid: {}, BestAsk: {}",
+    logger_->info("[Upbit] OrderBook - Symbol: {}, Bids: {}, Asks: {}, BestBid: {}, BestAsk: {}",
                   orderbook.symbol, orderbook.bid_count, orderbook.ask_count,
                   orderbook.best_bid(), orderbook.best_ask());
     
