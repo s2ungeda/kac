@@ -1,7 +1,7 @@
 #pragma once
 
 #include "arbitrage/exchange/websocket_base.hpp"
-#include "arbitrage/common/json.hpp"
+#include <simdjson.h>
 #include <vector>
 #include <string>
 
@@ -32,11 +32,11 @@ private:
     // 구독 전송
     void send_subscriptions();
 
-    // 메시지 파서
-    void parse_ticker(const nlohmann::json& json);
-    void parse_deal(const nlohmann::json& json);
-    void parse_depth(const nlohmann::json& json);
-    void process_single_deal(const nlohmann::json& deal, const std::string& default_symbol);
+    // SIMD 가속 메시지 파서
+    void parse_ticker(simdjson::dom::element json);
+    void parse_deal(simdjson::dom::element json);
+    void parse_depth(simdjson::dom::element json);
+    void process_single_deal(simdjson::dom::element deal, std::string_view default_symbol);
 
     // 구독 정보 (고정 크기 배열, Zero-Copy)
     SymbolList ticker_symbols_;

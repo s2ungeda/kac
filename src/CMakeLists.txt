@@ -108,6 +108,11 @@ target_link_libraries(exchange_websocket
         Threads::Threads
 )
 
+# simdjson 링크 (SIMD 가속 JSON 파싱)
+if(simdjson_FOUND)
+    target_link_libraries(exchange_websocket PUBLIC simdjson::simdjson)
+endif()
+
 # Boost 링크 (WebSocket에 필요)
 if(Boost_FOUND)
     target_link_libraries(exchange_websocket PUBLIC ${Boost_LIBRARIES})

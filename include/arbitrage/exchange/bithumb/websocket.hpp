@@ -1,7 +1,7 @@
 #pragma once
 
 #include "arbitrage/exchange/websocket_base.hpp"
-#include "arbitrage/common/json.hpp"
+#include <simdjson.h>
 #include <vector>
 #include <string>
 
@@ -27,10 +27,10 @@ private:
     // 심볼 변환: XRP_KRW -> KRW-XRP
     std::string convert_to_v2_code(const std::string& symbol);
 
-    // v2 API 메시지 파서
-    void parse_trade_v2(const nlohmann::json& json);
-    void parse_ticker_v2(const nlohmann::json& json);
-    void parse_orderbook_v2(const nlohmann::json& json);
+    // SIMD 가속 v2 API 메시지 파서
+    void parse_trade_v2(simdjson::dom::element json);
+    void parse_ticker_v2(simdjson::dom::element json);
+    void parse_orderbook_v2(simdjson::dom::element json);
 
     // 구독 코드 (KRW-XRP 형식, 고정 크기 배열)
     SymbolList ticker_codes_;

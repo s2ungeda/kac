@@ -21,8 +21,19 @@ find_package(yaml-cpp)
 # spdlog
 find_package(spdlog)
 
-# simdjson
-find_package(simdjson)
+# simdjson (SIMD 가속 JSON 파서)
+find_package(simdjson QUIET)
+if(NOT simdjson_FOUND)
+    include(FetchContent)
+    FetchContent_Declare(
+        simdjson
+        GIT_REPOSITORY https://github.com/simdjson/simdjson.git
+        GIT_TAG        v3.12.2
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(simdjson)
+    set(simdjson_FOUND TRUE)
+endif()
 
 # Google Test
 find_package(GTest)

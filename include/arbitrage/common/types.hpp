@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <optional>
 #include <chrono>
 #include <array>
@@ -134,6 +135,12 @@ struct alignas(CACHE_LINE_SIZE) Ticker {
         set_symbol(s.c_str());
     }
 
+    void set_symbol(std::string_view sv) {
+        auto len = std::min(sv.size(), static_cast<size_t>(MAX_SYMBOL_LEN - 1));
+        std::memcpy(symbol, sv.data(), len);
+        symbol[len] = '\0';
+    }
+
     std::string get_symbol() const {
         return std::string(symbol);
     }
@@ -196,6 +203,12 @@ struct alignas(CACHE_LINE_SIZE) OrderBook {
 
     void set_symbol(const std::string& s) {
         set_symbol(s.c_str());
+    }
+
+    void set_symbol(std::string_view sv) {
+        auto len = std::min(sv.size(), static_cast<size_t>(MAX_SYMBOL_LEN - 1));
+        std::memcpy(symbol, sv.data(), len);
+        symbol[len] = '\0';
     }
 
     void clear() {
