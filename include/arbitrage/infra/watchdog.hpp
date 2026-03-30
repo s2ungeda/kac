@@ -1,7 +1,7 @@
 #pragma once
 
 /**
- * Watchdog Service (TASK_26 + TASK_40)
+ * Watchdog Service (TASK_26 + TASK_40) — Orchestrator
  *
  * 메인 프로세스 감시 및 장애 복구
  * - 하트비트 모니터링
@@ -13,8 +13,16 @@
  * - 4개 Feeder + arb-engine 시작/감시/재시작
  * - 순서 있는 시작 (Feeder → Engine)
  * - 개별 프로세스 자동 재시작
+ *
+ * Delegates to:
+ * - ChildProcessManager  (watchdog_child.hpp)
+ * - HeartbeatMonitor      (watchdog_heartbeat.hpp)
+ * - WatchdogState         (watchdog_state.hpp)
  */
 
+#include "arbitrage/infra/watchdog_child.hpp"
+#include "arbitrage/infra/watchdog_heartbeat.hpp"
+#include "arbitrage/infra/watchdog_state.hpp"
 #include "arbitrage/infra/watchdog_client.hpp"
 
 #include <atomic>
@@ -22,7 +30,6 @@
 #include <condition_variable>
 #include <deque>
 #include <functional>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -34,70 +41,6 @@ namespace arbitrage {
 // Forward declarations
 class EventBus;
 class AlertService;
-
-// =============================================================================
-// 프로세스 상태
-// =============================================================================
-
-/**
- * 프로세스 상태
- */
-struct ProcessStatus {
-    int pid{-1};
-    bool is_running{false};
-    uint64_t memory_bytes{0};
-    double cpu_percent{0.0};
-    uint64_t uptime_sec{0};
-    int exit_code{0};
-    std::string exit_reason;
-    std::chrono::system_clock::time_point start_time;
-
-    ProcessStatus() = default;
-};
-
-// =============================================================================
-// 상태 영속화
-// =============================================================================
-
-/**
- * 저장할 상태 (크래시 복구용)
- */
-struct PersistedState {
-    uint64_t version{1};
-    std::chrono::system_clock::time_point saved_at;
-
-    // 포지션 정보
-    struct Position {
-        std::string exchange;
-        std::string symbol;
-        double quantity{0.0};
-        double avg_price{0.0};
-        std::string side;  // "long" / "short"
-    };
-    std::vector<Position> open_positions;
-
-    // 대기 중인 주문
-    struct PendingOrder {
-        std::string order_id;
-        std::string exchange;
-        std::string symbol;
-        double quantity{0.0};
-        double price{0.0};
-        std::string side;
-        std::string type;  // "limit" / "market"
-        std::chrono::system_clock::time_point created_at;
-    };
-    std::vector<PendingOrder> pending_orders;
-
-    // 통계
-    double total_pnl_today{0.0};
-    int total_trades_today{0};
-    double daily_loss_used{0.0};
-
-    // 시스템 상태
-    bool kill_switch_active{false};
-    std::string last_error;
-};
 
 // =============================================================================
 // 워치독 설정
@@ -142,54 +85,6 @@ struct WatchdogConfig {
 };
 
 // =============================================================================
-// 재시작 기록
-// =============================================================================
-
-/**
- * 재시작 이벤트
- */
-struct RestartEvent {
-    std::chrono::system_clock::time_point timestamp;
-    int old_pid{0};
-    int new_pid{0};
-    std::string reason;
-    int exit_code{0};
-};
-
-// =============================================================================
-// TASK_40: 자식 프로세스 관리
-// =============================================================================
-
-/**
- * 자식 프로세스 설정
- */
-struct ChildProcessConfig {
-    std::string name;                       // 프로세스 식별자 (e.g., "upbit-feeder")
-    std::string executable;                 // 실행 파일 경로
-    std::vector<std::string> arguments;     // 실행 인자
-    int restart_delay_ms{2000};             // 재시작 전 대기 (ms)
-    int max_restarts{10};                   // 최대 재시작 횟수 (0 = 무제한)
-    int restart_window_sec{3600};           // 재시작 횟수 카운트 윈도우
-    bool critical{true};                    // true: 영구 실패 시 전체 시스템 종료
-    int start_order{0};                     // 시작 순서 (낮은 번호 먼저)
-    int start_delay_ms{0};                  // 이전 프로세스 시작 후 대기 시간
-};
-
-/**
- * 자식 프로세스 런타임 정보
- */
-struct ChildProcessInfo {
-    ChildProcessConfig config;
-    int pid{-1};
-    bool is_running{false};
-    int restart_count{0};
-    int exit_code{0};
-    std::chrono::system_clock::time_point start_time;
-    std::chrono::steady_clock::time_point last_restart_time;
-    std::string last_error;
-};
-
-// =============================================================================
 // Watchdog
 // =============================================================================
 
@@ -198,6 +93,8 @@ struct ChildProcessInfo {
  *
  * 메인 프로세스를 감시하고 장애 시 복구
  * TASK_40: 다중 자식 프로세스 관리 추가
+ *
+ * Orchestrator: delegates to ChildProcessManager, HeartbeatMonitor, WatchdogState
  */
 class Watchdog {
 public:
@@ -344,7 +241,7 @@ public:
      * 누락된 하트비트 횟수
      */
     int missed_heartbeat_count() const {
-        return missed_heartbeat_count_.load(std::memory_order_relaxed);
+        return heartbeat_monitor_.missed_heartbeat_count();
     }
 
     /**
@@ -511,11 +408,6 @@ private:
     int do_launch();
 
     /**
-     * 프로세스 상태 조회
-     */
-    ProcessStatus get_process_status(int pid) const;
-
-    /**
      * IPC 서버 시작
      */
     void start_ipc_server();
@@ -525,36 +417,24 @@ private:
      */
     void stop_ipc_server();
 
-    /**
-     * 상태 파일 경로 생성
-     */
-    std::string generate_state_filename() const;
-
-    /**
-     * 상태 직렬화/역직렬화
-     */
-    std::vector<uint8_t> serialize_state(const PersistedState& state);
-    PersistedState deserialize_state(const std::vector<uint8_t>& data);
-
 private:
     WatchdogConfig config_;
+
+    // Sub-components
+    ChildProcessManager child_manager_;
+    HeartbeatMonitor heartbeat_monitor_;
+    WatchdogState state_manager_;
 
     // 상태
     std::atomic<bool> running_{false};
     std::atomic<int> main_pid_{-1};
     std::atomic<int> restart_count_{0};
-    std::atomic<int> missed_heartbeat_count_{0};
 
     // 스레드
     std::thread monitor_thread_;
     std::thread ipc_thread_;
     std::condition_variable cv_;
     std::mutex cv_mutex_;
-
-    // 하트비트 추적
-    mutable std::mutex heartbeat_mutex_;
-    Heartbeat last_heartbeat_;
-    std::chrono::steady_clock::time_point last_heartbeat_time_;
 
     // 재시작 추적
     mutable std::mutex restart_mutex_;
@@ -568,26 +448,12 @@ private:
     std::mutex callbacks_mutex_;
     std::vector<RestartCallback> restart_callbacks_;
     std::vector<AlertCallback> alert_callbacks_;
-    std::vector<HeartbeatCallback> heartbeat_callbacks_;
     std::weak_ptr<EventBus> event_bus_;
     std::weak_ptr<AlertService> alert_service_;
 
     // IPC 서버
     int ipc_socket_fd_{-1};
     std::atomic<bool> ipc_running_{false};
-
-    // TASK_40: 다중 자식 프로세스 관리
-    mutable std::mutex children_mutex_;
-    std::map<std::string, ChildProcessInfo> children_;
-
-    // 자식 프로세스 시작 (fork+exec)
-    int launch_child(const ChildProcessConfig& config);
-
-    // 자식 프로세스 종료
-    void kill_child(int pid, int timeout_ms = 5000);
-
-    // 자식 프로세스 재시작 가능 여부
-    bool can_restart_child(const ChildProcessInfo& info) const;
 };
 
 // =============================================================================

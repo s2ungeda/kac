@@ -59,6 +59,9 @@ add_library(infra
     infra/tcp_server.cpp
     infra/watchdog_client.cpp
     infra/watchdog.cpp
+    infra/watchdog_child.cpp
+    infra/watchdog_heartbeat.cpp
+    infra/watchdog_state.cpp
 )
 
 # IPC 라이브러리 (TASK_36: Shared Memory SPSC Queue)

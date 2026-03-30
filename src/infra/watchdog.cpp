@@ -35,17 +35,37 @@ Watchdog& Watchdog::instance() {
 // =============================================================================
 
 Watchdog::Watchdog() {
-    last_heartbeat_time_ = std::chrono::steady_clock::now();
     window_start_ = std::chrono::steady_clock::now();
     process_start_time_ = std::chrono::system_clock::now();
+
+    // Wire up child manager callbacks
+    child_manager_.set_alert_func([this](const std::string& level, const std::string& message) {
+        send_alert(level, message);
+    });
+    child_manager_.set_shutdown_func([this]() {
+        running_.store(false, std::memory_order_release);
+        cv_.notify_all();
+    });
+    child_manager_.set_working_directory(config_.working_directory);
+    state_manager_.set_state_directory(config_.state_directory);
 }
 
 Watchdog::Watchdog(const WatchdogConfig& config)
     : config_(config)
 {
-    last_heartbeat_time_ = std::chrono::steady_clock::now();
     window_start_ = std::chrono::steady_clock::now();
     process_start_time_ = std::chrono::system_clock::now();
+
+    // Wire up child manager callbacks
+    child_manager_.set_alert_func([this](const std::string& level, const std::string& message) {
+        send_alert(level, message);
+    });
+    child_manager_.set_shutdown_func([this]() {
+        running_.store(false, std::memory_order_release);
+        cv_.notify_all();
+    });
+    child_manager_.set_working_directory(config_.working_directory);
+    state_manager_.set_state_directory(config_.state_directory);
 }
 
 Watchdog::~Watchdog() {
@@ -79,7 +99,7 @@ void Watchdog::stop() {
     cv_.notify_all();
 
     // 자식 프로세스 종료 (TASK_40)
-    stop_all_children();
+    child_manager_.stop_all_children();
 
     // IPC 서버 중지
     stop_ipc_server();
@@ -102,7 +122,7 @@ int Watchdog::launch_main_process() {
     if (pid > 0) {
         main_pid_.store(pid, std::memory_order_release);
         process_start_time_ = std::chrono::system_clock::now();
-        missed_heartbeat_count_.store(0, std::memory_order_release);
+        heartbeat_monitor_.reset_missed_count();
     }
     return pid;
 }
@@ -195,54 +215,19 @@ void Watchdog::activate_kill_switch(const std::string& reason) {
 }
 
 // =============================================================================
-// 하트비트 처리
+// 하트비트 처리 — delegates to HeartbeatMonitor
 // =============================================================================
 
 void Watchdog::handle_heartbeat(const Heartbeat& hb) {
-    {
-        std::lock_guard<std::mutex> lock(heartbeat_mutex_);
-        last_heartbeat_ = hb;
-        last_heartbeat_time_ = std::chrono::steady_clock::now();
-    }
-
-    missed_heartbeat_count_.store(0, std::memory_order_release);
-
-    // 콜백 호출
-    std::vector<HeartbeatCallback> callbacks;
-    {
-        std::lock_guard<std::mutex> lock(callbacks_mutex_);
-        callbacks = heartbeat_callbacks_;
-    }
-
-    for (auto& cb : callbacks) {
-        try {
-            cb(hb);
-        } catch (const std::exception& e) {
-            // 하트비트 콜백 에러 (처리 계속)
-        }
-    }
-
-    // EventBus 이벤트 발행
-    auto bus = event_bus_.lock();
-    if (bus) {
-        events::HeartbeatReceived event;
-        event.sequence = hb.sequence;
-        event.timestamp = std::chrono::system_clock::now();
-        event.component_status = hb.component_status;
-        bus->publish(event);
-    }
+    heartbeat_monitor_.handle_heartbeat(hb, event_bus_);
 }
 
 Heartbeat Watchdog::last_heartbeat() const {
-    std::lock_guard<std::mutex> lock(heartbeat_mutex_);
-    return last_heartbeat_;
+    return heartbeat_monitor_.last_heartbeat();
 }
 
 int64_t Watchdog::ms_since_last_heartbeat() const {
-    std::lock_guard<std::mutex> lock(heartbeat_mutex_);
-    auto now = std::chrono::steady_clock::now();
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-        now - last_heartbeat_time_).count();
+    return heartbeat_monitor_.ms_since_last_heartbeat();
 }
 
 // =============================================================================
@@ -255,7 +240,7 @@ Watchdog::Status Watchdog::get_status() const {
     status.main_process_pid = main_pid_.load(std::memory_order_acquire);
     status.main_process_running = is_main_process_running();
     status.restart_count = restart_count_.load(std::memory_order_relaxed);
-    status.missed_heartbeat_count = missed_heartbeat_count_.load(std::memory_order_relaxed);
+    status.missed_heartbeat_count = heartbeat_monitor_.missed_heartbeat_count();
 
     if (status.main_process_running) {
         auto now = std::chrono::system_clock::now();
@@ -264,10 +249,9 @@ Watchdog::Status Watchdog::get_status() const {
     }
 
     {
-        std::lock_guard<std::mutex> lock(heartbeat_mutex_);
-        status.last_heartbeat_data = last_heartbeat_;
+        status.last_heartbeat_data = heartbeat_monitor_.last_heartbeat();
         // time_point 변환
-        auto elapsed = std::chrono::steady_clock::now() - last_heartbeat_time_;
+        auto elapsed = std::chrono::steady_clock::now() - heartbeat_monitor_.last_heartbeat_steady_time();
         status.last_heartbeat = std::chrono::system_clock::now() -
             std::chrono::duration_cast<std::chrono::system_clock::duration>(elapsed);
     }
@@ -288,73 +272,23 @@ std::vector<RestartEvent> Watchdog::get_restart_history() const {
 }
 
 // =============================================================================
-// 상태 영속화
+// 상태 영속화 — delegates to WatchdogState
 // =============================================================================
 
 void Watchdog::save_state(const PersistedState& state) {
-    auto filename = generate_state_filename();
-    auto data = serialize_state(state);
-
-    std::ofstream file(filename, std::ios::binary);
-    if (file) {
-        file.write(reinterpret_cast<const char*>(data.data()), data.size());
-    }
+    state_manager_.save_state(state);
 }
 
 std::optional<PersistedState> Watchdog::load_latest_state() {
-    auto snapshots = list_state_snapshots(1);
-    if (snapshots.empty()) {
-        return std::nullopt;
-    }
-
-    std::ifstream file(snapshots[0], std::ios::binary);
-    if (!file) {
-        return std::nullopt;
-    }
-
-    std::vector<uint8_t> data((std::istreambuf_iterator<char>(file)),
-                               std::istreambuf_iterator<char>());
-
-    if (data.empty()) {
-        return std::nullopt;
-    }
-
-    return deserialize_state(data);
+    return state_manager_.load_latest_state();
 }
 
 std::vector<std::string> Watchdog::list_state_snapshots(int max_count) {
-    std::vector<std::string> result;
-
-    try {
-        for (const auto& entry : std::filesystem::directory_iterator(config_.state_directory)) {
-            if (entry.is_regular_file() && entry.path().extension() == ".dat") {
-                result.push_back(entry.path().string());
-            }
-        }
-    } catch (...) {
-        return result;
-    }
-
-    // 최신 순으로 정렬
-    std::sort(result.begin(), result.end(), std::greater<>());
-
-    if (static_cast<int>(result.size()) > max_count) {
-        result.resize(max_count);
-    }
-
-    return result;
+    return state_manager_.list_state_snapshots(max_count);
 }
 
 void Watchdog::cleanup_old_snapshots(int keep_count) {
-    auto snapshots = list_state_snapshots(10000);
-
-    for (size_t i = keep_count; i < snapshots.size(); ++i) {
-        try {
-            std::filesystem::remove(snapshots[i]);
-        } catch (const std::exception& e) {
-            // 스냅샷 삭제 실패 (무시하고 계속)
-        }
-    }
+    state_manager_.cleanup_old_snapshots(keep_count);
 }
 
 // =============================================================================
@@ -372,8 +306,7 @@ void Watchdog::on_alert(AlertCallback callback) {
 }
 
 void Watchdog::on_heartbeat(HeartbeatCallback callback) {
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
-    heartbeat_callbacks_.push_back(std::move(callback));
+    heartbeat_monitor_.on_heartbeat(std::move(callback));
 }
 
 void Watchdog::set_event_bus(std::shared_ptr<EventBus> bus) {
@@ -391,12 +324,12 @@ void Watchdog::set_alert_service(std::shared_ptr<AlertService> service) {
 // =============================================================================
 
 void Watchdog::set_config(const WatchdogConfig& config) {
-    std::lock_guard<std::mutex> lock(heartbeat_mutex_);
     config_ = config;
+    child_manager_.set_working_directory(config_.working_directory);
+    state_manager_.set_state_directory(config_.state_directory);
 }
 
 WatchdogConfig Watchdog::config() const {
-    std::lock_guard<std::mutex> lock(heartbeat_mutex_);
     return config_;
 }
 
@@ -455,17 +388,15 @@ void Watchdog::monitor_loop() {
 }
 
 void Watchdog::check_heartbeat() {
-    int64_t elapsed = ms_since_last_heartbeat();
+    int missed = heartbeat_monitor_.check_timeout(config_.heartbeat_timeout_ms);
 
-    if (elapsed > config_.heartbeat_timeout_ms) {
-        int missed = missed_heartbeat_count_.fetch_add(1, std::memory_order_relaxed) + 1;
-
-        if (missed >= config_.max_missed_heartbeats) {
-            if (config_.restart_on_hang) {
-                restart_main_process("Heartbeat timeout (" + std::to_string(elapsed) + "ms)");
-            } else {
-                send_alert("warning", "Heartbeat timeout: " + std::to_string(elapsed) + "ms");
-            }
+    if (missed > 0 && missed >= config_.max_missed_heartbeats) {
+        if (config_.restart_on_hang) {
+            int64_t elapsed = heartbeat_monitor_.ms_since_last_heartbeat();
+            restart_main_process("Heartbeat timeout (" + std::to_string(elapsed) + "ms)");
+        } else {
+            int64_t elapsed = heartbeat_monitor_.ms_since_last_heartbeat();
+            send_alert("warning", "Heartbeat timeout: " + std::to_string(elapsed) + "ms");
         }
     }
 }
@@ -476,7 +407,7 @@ void Watchdog::check_resources() {
         return;
     }
 
-    ProcessStatus status = get_process_status(pid);
+    ProcessStatus status = WatchdogState::get_process_status(pid);
 
     // 메모리 체크
     if (status.memory_bytes > config_.max_memory_bytes) {
@@ -671,35 +602,6 @@ int Watchdog::do_launch() {
 #endif
 }
 
-ProcessStatus Watchdog::get_process_status(int pid) const {
-    ProcessStatus status;
-    status.pid = pid;
-
-#ifndef _WIN32
-    // /proc/[pid]/stat 읽기
-    std::string stat_path = "/proc/" + std::to_string(pid) + "/stat";
-    std::ifstream stat_file(stat_path);
-
-    if (stat_file) {
-        status.is_running = true;
-
-        // 간단히 메모리만 읽기
-        std::string statm_path = "/proc/" + std::to_string(pid) + "/statm";
-        std::ifstream statm_file(statm_path);
-
-        if (statm_file) {
-            size_t size, resident;
-            statm_file >> size >> resident;
-            status.memory_bytes = resident * 4096;  // 페이지 크기
-        }
-    } else {
-        status.is_running = false;
-    }
-#endif
-
-    return status;
-}
-
 void Watchdog::start_ipc_server() {
 #ifndef _WIN32
     // 기존 소켓 파일 삭제
@@ -747,518 +649,43 @@ void Watchdog::stop_ipc_server() {
 #endif
 }
 
-std::string Watchdog::generate_state_filename() const {
-    auto now = std::chrono::system_clock::now();
-    auto time_t_now = std::chrono::system_clock::to_time_t(now);
-
-    std::tm tm_now;
-#ifdef _WIN32
-    localtime_s(&tm_now, &time_t_now);
-#else
-    localtime_r(&time_t_now, &tm_now);
-#endif
-
-    char buffer[64];
-    std::strftime(buffer, sizeof(buffer), "%Y%m%d_%H%M%S", &tm_now);
-
-    static std::atomic<int> counter{0};
-    int seq = counter.fetch_add(1, std::memory_order_relaxed) % 1000;
-
-    std::ostringstream oss;
-    oss << config_.state_directory << "/state_" << buffer << "_"
-        << std::setfill('0') << std::setw(3) << seq << ".dat";
-
-    return oss.str();
-}
-
-std::vector<uint8_t> Watchdog::serialize_state(const PersistedState& state) {
-    std::vector<uint8_t> data;
-
-    // 간단한 직렬화 (실제로는 MessagePack 또는 Protobuf 사용 권장)
-
-    // 버전 (8바이트)
-    for (int i = 0; i < 8; ++i) {
-        data.push_back((state.version >> (i * 8)) & 0xFF);
-    }
-
-    // 타임스탬프 (8바이트)
-    auto ts = std::chrono::duration_cast<std::chrono::microseconds>(
-        state.saved_at.time_since_epoch()).count();
-    for (int i = 0; i < 8; ++i) {
-        data.push_back((ts >> (i * 8)) & 0xFF);
-    }
-
-    // total_pnl_today (8바이트)
-    uint64_t pnl_bits;
-    memcpy(&pnl_bits, &state.total_pnl_today, sizeof(pnl_bits));
-    for (int i = 0; i < 8; ++i) {
-        data.push_back((pnl_bits >> (i * 8)) & 0xFF);
-    }
-
-    // total_trades_today (4바이트)
-    for (int i = 0; i < 4; ++i) {
-        data.push_back((state.total_trades_today >> (i * 8)) & 0xFF);
-    }
-
-    // daily_loss_used (8바이트)
-    uint64_t loss_bits;
-    memcpy(&loss_bits, &state.daily_loss_used, sizeof(loss_bits));
-    for (int i = 0; i < 8; ++i) {
-        data.push_back((loss_bits >> (i * 8)) & 0xFF);
-    }
-
-    // kill_switch_active (1바이트)
-    data.push_back(state.kill_switch_active ? 1 : 0);
-
-    // last_error 길이 + 데이터
-    uint32_t error_len = static_cast<uint32_t>(state.last_error.size());
-    for (int i = 0; i < 4; ++i) {
-        data.push_back((error_len >> (i * 8)) & 0xFF);
-    }
-    data.insert(data.end(), state.last_error.begin(), state.last_error.end());
-
-    return data;
-}
-
-PersistedState Watchdog::deserialize_state(const std::vector<uint8_t>& data) {
-    PersistedState state;
-
-    if (data.size() < 37) {  // 최소 크기
-        return state;
-    }
-
-    size_t offset = 0;
-
-    // 버전
-    state.version = 0;
-    for (int i = 0; i < 8 && offset < data.size(); ++i, ++offset) {
-        state.version |= static_cast<uint64_t>(data[offset]) << (i * 8);
-    }
-
-    // 타임스탬프
-    uint64_t ts = 0;
-    for (int i = 0; i < 8 && offset < data.size(); ++i, ++offset) {
-        ts |= static_cast<uint64_t>(data[offset]) << (i * 8);
-    }
-    state.saved_at = std::chrono::system_clock::time_point(
-        std::chrono::microseconds(ts));
-
-    // total_pnl_today
-    uint64_t pnl_bits = 0;
-    for (int i = 0; i < 8 && offset < data.size(); ++i, ++offset) {
-        pnl_bits |= static_cast<uint64_t>(data[offset]) << (i * 8);
-    }
-    memcpy(&state.total_pnl_today, &pnl_bits, sizeof(state.total_pnl_today));
-
-    // total_trades_today
-    state.total_trades_today = 0;
-    for (int i = 0; i < 4 && offset < data.size(); ++i, ++offset) {
-        state.total_trades_today |= static_cast<int>(data[offset]) << (i * 8);
-    }
-
-    // daily_loss_used
-    uint64_t loss_bits = 0;
-    for (int i = 0; i < 8 && offset < data.size(); ++i, ++offset) {
-        loss_bits |= static_cast<uint64_t>(data[offset]) << (i * 8);
-    }
-    memcpy(&state.daily_loss_used, &loss_bits, sizeof(state.daily_loss_used));
-
-    // kill_switch_active
-    if (offset < data.size()) {
-        state.kill_switch_active = data[offset++] != 0;
-    }
-
-    // last_error
-    if (offset + 4 <= data.size()) {
-        uint32_t error_len = 0;
-        for (int i = 0; i < 4; ++i, ++offset) {
-            error_len |= static_cast<uint32_t>(data[offset]) << (i * 8);
-        }
-
-        if (offset + error_len <= data.size()) {
-            state.last_error.assign(data.begin() + offset, data.begin() + offset + error_len);
-        }
-    }
-
-    return state;
-}
-
 // =============================================================================
-// TASK_40: 다중 자식 프로세스 관리
+// TASK_40: 다중 자식 프로세스 관리 — delegates to ChildProcessManager
 // =============================================================================
 
 void Watchdog::add_child(const ChildProcessConfig& config) {
-    std::lock_guard<std::mutex> lock(children_mutex_);
-    ChildProcessInfo info;
-    info.config = config;
-    children_[config.name] = info;
+    child_manager_.add_child(config);
 }
 
 void Watchdog::remove_child(const std::string& name) {
-    std::lock_guard<std::mutex> lock(children_mutex_);
-    auto it = children_.find(name);
-    if (it == children_.end()) return;
-
-    if (it->second.is_running && it->second.pid > 0) {
-        kill_child(it->second.pid);
-    }
-    children_.erase(it);
+    child_manager_.remove_child(name);
 }
 
 void Watchdog::launch_all_children() {
-    std::lock_guard<std::mutex> lock(children_mutex_);
-
-    // start_order로 정렬
-    std::vector<std::string> ordered_names;
-    ordered_names.reserve(children_.size());
-    for (auto& [name, _] : children_) {
-        ordered_names.push_back(name);
-    }
-    std::sort(ordered_names.begin(), ordered_names.end(),
-        [this](const std::string& a, const std::string& b) {
-            return children_[a].config.start_order < children_[b].config.start_order;
-        });
-
-    int prev_order = -1;
-    for (const auto& name : ordered_names) {
-        auto& info = children_[name];
-
-        // start_delay: 이전 순서 그룹과 다르면 대기
-        if (prev_order >= 0 && info.config.start_order > prev_order
-            && info.config.start_delay_ms > 0) {
-            std::this_thread::sleep_for(
-                std::chrono::milliseconds(info.config.start_delay_ms));
-        }
-        prev_order = info.config.start_order;
-
-        int pid = launch_child(info.config);
-        if (pid > 0) {
-            info.pid = pid;
-            info.is_running = true;
-            info.start_time = std::chrono::system_clock::now();
-            info.last_restart_time = std::chrono::steady_clock::now();
-            send_alert("info", "Child process started: " + name + " (pid=" + std::to_string(pid) + ")");
-        } else {
-            info.is_running = false;
-            info.last_error = "Failed to launch";
-            send_alert("error", "Failed to launch child: " + name);
-            if (info.config.critical) {
-                send_alert("critical", "Critical child " + name + " failed to start — aborting");
-                return;
-            }
-        }
-    }
+    child_manager_.launch_all_children();
 }
 
 void Watchdog::stop_all_children() {
-    std::lock_guard<std::mutex> lock(children_mutex_);
-
-    // 역순 종료 (start_order 높은 것부터)
-    std::vector<std::string> ordered_names;
-    ordered_names.reserve(children_.size());
-    for (auto& [name, _] : children_) {
-        ordered_names.push_back(name);
-    }
-    std::sort(ordered_names.begin(), ordered_names.end(),
-        [this](const std::string& a, const std::string& b) {
-            return children_[a].config.start_order > children_[b].config.start_order;
-        });
-
-    for (const auto& name : ordered_names) {
-        auto& info = children_[name];
-        if (info.is_running && info.pid > 0) {
-            kill_child(info.pid);
-            info.is_running = false;
-            info.pid = -1;
-        }
-    }
+    child_manager_.stop_all_children();
 }
 
 void Watchdog::restart_child(const std::string& name, const std::string& reason) {
-    std::lock_guard<std::mutex> lock(children_mutex_);
-    auto it = children_.find(name);
-    if (it == children_.end()) return;
-
-    auto& info = it->second;
-
-    // 기존 프로세스 종료
-    if (info.is_running && info.pid > 0) {
-        kill_child(info.pid);
-        info.is_running = false;
-    }
-
-    // 재시작 가능 여부 확인
-    if (!can_restart_child(info)) {
-        info.last_error = "Max restarts exceeded";
-        send_alert("critical", "Child " + name + " exceeded max restarts");
-        if (info.config.critical) {
-            send_alert("critical", "Critical child " + name + " permanently failed — shutting down");
-            // 전체 시스템 종료 트리거
-            running_.store(false, std::memory_order_release);
-            cv_.notify_all();
-        }
-        return;
-    }
-
-    // 재시작 딜레이
-    if (info.config.restart_delay_ms > 0) {
-        std::this_thread::sleep_for(
-            std::chrono::milliseconds(info.config.restart_delay_ms));
-    }
-
-    int pid = launch_child(info.config);
-    if (pid > 0) {
-        info.pid = pid;
-        info.is_running = true;
-        info.restart_count++;
-        info.start_time = std::chrono::system_clock::now();
-        info.last_restart_time = std::chrono::steady_clock::now();
-        send_alert("warning", "Child restarted: " + name + " (pid=" + std::to_string(pid)
-                   + ", reason=" + reason + ", restarts=" + std::to_string(info.restart_count) + ")");
-    } else {
-        info.last_error = "Restart failed";
-        send_alert("error", "Failed to restart child: " + name);
-    }
+    child_manager_.restart_child(name, reason);
 }
 
 std::vector<ChildProcessInfo> Watchdog::get_children_status() const {
-    std::lock_guard<std::mutex> lock(children_mutex_);
-    std::vector<ChildProcessInfo> result;
-    result.reserve(children_.size());
-    for (const auto& [_, info] : children_) {
-        result.push_back(info);
-    }
-    return result;
+    return child_manager_.get_children_status();
 }
 
 void Watchdog::check_children() {
-#ifndef _WIN32
-    std::lock_guard<std::mutex> lock(children_mutex_);
-
-    for (auto& [name, info] : children_) {
-        if (!info.is_running || info.pid <= 0) continue;
-
-        // 프로세스 살아있는지 확인
-        int status = 0;
-        int result = ::waitpid(info.pid, &status, WNOHANG);
-
-        if (result == 0) {
-            // 아직 실행 중
-            continue;
-        }
-
-        if (result == info.pid) {
-            // 프로세스 종료됨
-            info.is_running = false;
-
-            std::string reason;
-            if (WIFEXITED(status)) {
-                info.exit_code = WEXITSTATUS(status);
-                reason = "exited with code " + std::to_string(info.exit_code);
-            } else if (WIFSIGNALED(status)) {
-                info.exit_code = -WTERMSIG(status);
-                reason = "killed by signal " + std::to_string(WTERMSIG(status));
-            } else {
-                reason = "terminated (unknown)";
-            }
-
-            info.last_error = reason;
-            send_alert("warning", "Child " + name + " " + reason);
-
-            // 자동 재시작 (lock은 이미 잡고 있으므로 직접 실행)
-            if (running_.load(std::memory_order_acquire)) {
-                if (can_restart_child(info)) {
-                    if (info.config.restart_delay_ms > 0) {
-                        std::this_thread::sleep_for(
-                            std::chrono::milliseconds(info.config.restart_delay_ms));
-                    }
-                    int new_pid = launch_child(info.config);
-                    if (new_pid > 0) {
-                        info.pid = new_pid;
-                        info.is_running = true;
-                        info.restart_count++;
-                        info.start_time = std::chrono::system_clock::now();
-                        info.last_restart_time = std::chrono::steady_clock::now();
-                        send_alert("info", "Child auto-restarted: " + name
-                                   + " (pid=" + std::to_string(new_pid)
-                                   + ", restarts=" + std::to_string(info.restart_count) + ")");
-                    } else {
-                        info.last_error = "Auto-restart failed";
-                        send_alert("error", "Auto-restart failed for child: " + name);
-                        if (info.config.critical) {
-                            send_alert("critical", "Critical child " + name + " cannot restart");
-                            running_.store(false, std::memory_order_release);
-                            cv_.notify_all();
-                            return;
-                        }
-                    }
-                } else {
-                    send_alert("critical", "Child " + name + " exceeded max restarts ("
-                               + std::to_string(info.restart_count) + ")");
-                    if (info.config.critical) {
-                        running_.store(false, std::memory_order_release);
-                        cv_.notify_all();
-                        return;
-                    }
-                }
-            }
-        } else if (result < 0 && errno == ECHILD) {
-            // 프로세스가 존재하지 않음
-            info.is_running = false;
-            info.pid = -1;
-        }
-    }
-#endif
+    child_manager_.check_children(running_, cv_);
 }
 
 std::vector<ChildProcessConfig> Watchdog::make_default_children(
     const std::string& bin_dir,
     const std::vector<std::string>& engine_args)
 {
-    std::vector<ChildProcessConfig> children;
-
-    // 4 Feeders (start_order=0, 동시 시작)
-    const char* feeders[] = {"upbit-feeder", "bithumb-feeder", "binance-feeder", "mexc-feeder"};
-    for (const char* name : feeders) {
-        ChildProcessConfig cfg;
-        cfg.name = name;
-        cfg.executable = bin_dir + "/" + name;
-        cfg.restart_delay_ms = 2000;
-        cfg.max_restarts = 10;
-        cfg.critical = true;
-        cfg.start_order = 0;
-        cfg.start_delay_ms = 0;
-        children.push_back(cfg);
-    }
-
-    // Engine (start_order=1, Feeder 시작 후 1초 대기)
-    ChildProcessConfig engine_cfg;
-    engine_cfg.name = "arb-engine";
-    engine_cfg.executable = bin_dir + "/arbitrage";
-    engine_cfg.arguments = {"--engine"};
-    for (const auto& arg : engine_args) {
-        engine_cfg.arguments.push_back(arg);
-    }
-    engine_cfg.restart_delay_ms = 3000;
-    engine_cfg.max_restarts = 10;
-    engine_cfg.critical = true;
-    engine_cfg.start_order = 1;
-    engine_cfg.start_delay_ms = 1000;
-    children.push_back(engine_cfg);
-
-    // TASK_48: Cold Path 프로세스 (start_order=2~3)
-
-    // Order Manager (start_order=2)
-    ChildProcessConfig om_cfg;
-    om_cfg.name = "order-manager";
-    om_cfg.executable = bin_dir + "/order-manager";
-    om_cfg.restart_delay_ms = 2000;
-    om_cfg.max_restarts = 10;
-    om_cfg.critical = true;
-    om_cfg.start_order = 2;
-    om_cfg.start_delay_ms = 500;
-    children.push_back(om_cfg);
-
-    // Risk Manager (start_order=2, order-manager와 병렬)
-    ChildProcessConfig rm_cfg;
-    rm_cfg.name = "risk-manager";
-    rm_cfg.executable = bin_dir + "/risk-manager";
-    rm_cfg.restart_delay_ms = 2000;
-    rm_cfg.max_restarts = 10;
-    rm_cfg.critical = false;  // 리스크 매니저 없어도 엔진 실행 가능
-    rm_cfg.start_order = 2;
-    rm_cfg.start_delay_ms = 0;
-    children.push_back(rm_cfg);
-
-    // Monitor (start_order=3, 마지막)
-    ChildProcessConfig mon_cfg;
-    mon_cfg.name = "monitor";
-    mon_cfg.executable = bin_dir + "/monitor";
-    mon_cfg.restart_delay_ms = 2000;
-    mon_cfg.max_restarts = 10;
-    mon_cfg.critical = false;
-    mon_cfg.start_order = 3;
-    mon_cfg.start_delay_ms = 500;
-    children.push_back(mon_cfg);
-
-    return children;
-}
-
-int Watchdog::launch_child(const ChildProcessConfig& config) {
-#ifndef _WIN32
-    pid_t pid = fork();
-
-    if (pid < 0) {
-        return -1;
-    }
-
-    if (pid == 0) {
-        // 자식 프로세스
-        if (!config_.working_directory.empty()) {
-            (void)chdir(config_.working_directory.c_str());
-        }
-
-        std::vector<char*> args;
-        args.push_back(const_cast<char*>(config.executable.c_str()));
-        for (const auto& arg : config.arguments) {
-            args.push_back(const_cast<char*>(arg.c_str()));
-        }
-        args.push_back(nullptr);
-
-        execvp(config.executable.c_str(), args.data());
-        _exit(127);  // exec 실패
-    }
-
-    return pid;
-#else
-    return -1;
-#endif
-}
-
-void Watchdog::kill_child(int pid, int timeout_ms) {
-#ifndef _WIN32
-    if (pid <= 0) return;
-
-    // SIGTERM 전송
-    if (::kill(pid, SIGTERM) < 0) {
-        if (errno == ESRCH) return;  // 이미 종료됨
-    }
-
-    // 종료 대기
-    auto deadline = std::chrono::steady_clock::now()
-        + std::chrono::milliseconds(timeout_ms);
-
-    while (std::chrono::steady_clock::now() < deadline) {
-        int status = 0;
-        int result = ::waitpid(pid, &status, WNOHANG);
-        if (result == pid || (result < 0 && errno == ECHILD)) {
-            return;  // 종료됨
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    // 타임아웃 — SIGKILL
-    ::kill(pid, SIGKILL);
-    int status = 0;
-    ::waitpid(pid, &status, 0);
-#endif
-}
-
-bool Watchdog::can_restart_child(const ChildProcessInfo& info) const {
-    if (info.config.max_restarts <= 0) return true;  // 무제한
-
-    if (info.restart_count >= info.config.max_restarts) {
-        // 윈도우 체크: restart_window 이내에 max_restarts를 초과했는지
-        auto elapsed = std::chrono::steady_clock::now() - info.last_restart_time;
-        auto window = std::chrono::seconds(info.config.restart_window_sec);
-        if (elapsed > window) {
-            // 윈도우가 지났으면 카운터 리셋 (const이므로 여기서는 true만 반환)
-            return true;
-        }
-        return false;
-    }
-
-    return true;
+    return ChildProcessManager::make_default_children(bin_dir, engine_args);
 }
 
 }  // namespace arbitrage
