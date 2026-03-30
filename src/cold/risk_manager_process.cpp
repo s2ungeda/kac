@@ -35,7 +35,14 @@ int RiskManagerProcess::run() {
     logger_->info("Risk Manager starting");
 
     setup_signal_handlers();
-    Config::instance().load(config_.config_path);
+    if (config_.config_from_stdin) {
+        if (!Config::instance().load_from_stream(std::cin)) {
+            logger_->error("Failed to load config from stdin");
+            return 1;
+        }
+    } else {
+        Config::instance().load(config_.config_path);
+    }
 
     // DailyLossLimiter 설정
     DailyLimitConfig limit_cfg;
@@ -127,6 +134,8 @@ RiskManagerConfig RiskManagerProcess::parse_args(int argc, char* argv[]) {
             cfg.daily_loss_limit = std::stod(argv[++i]);
         } else if ((arg == "--warning-pct") && i + 1 < argc) {
             cfg.warning_pct = std::stod(argv[++i]);
+        } else if (arg == "--config-stdin") {
+            cfg.config_from_stdin = true;
         } else if (arg == "--verbose" || arg == "-v") {
             cfg.verbose = true;
         } else if (arg == "--help" || arg == "-h") {

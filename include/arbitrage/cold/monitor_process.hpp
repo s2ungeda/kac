@@ -29,6 +29,7 @@ namespace arbitrage {
 struct MonitorConfig {
     std::string monitor_socket{ipc_paths::MONITOR_SOCKET};
     std::string config_path{"config/config.yaml"};
+    bool config_from_stdin{false};
     int tcp_port{9090};
     bool verbose{false};
 };

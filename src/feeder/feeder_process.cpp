@@ -422,6 +422,9 @@ FeederConfig FeederProcess::parse_args(int argc, char* argv[]) {
         else if ((arg == "--target") && i + 1 < argc) {
             cfg.ws_target = argv[++i];
         }
+        else if (arg == "--config-stdin") {
+            cfg.config_from_stdin = true;
+        }
         else if (arg == "--verbose" || arg == "-v") {
             cfg.verbose = true;
         }

@@ -6,6 +6,7 @@
 #include <vector>
 #include <memory>
 #include <mutex>
+#include <istream>
 
 namespace arbitrage {
 
@@ -82,7 +83,10 @@ public:
     
     // 설정 파일 로드
     bool load(const std::string& path);
-    
+
+    // stdin 등 스트림에서 로드 (SOPS 파이프라인용)
+    bool load_from_stream(std::istream& input);
+
     // 설정 파일 리로드
     bool reload();
     
@@ -106,9 +110,13 @@ public:
     
 private:
     Config() = default;
-    
+
+    // YAML 파싱 (config.cpp에서 구현, HAS_YAML_CPP일 때만 사용)
+    bool parse_yaml_string(const std::string& yaml_content);
+
     mutable std::mutex mutex_;
     std::string config_path_;
+    std::string cached_yaml_;  // stdin 재로드용 캐시
     
     std::map<Exchange, ExchangeConfig> exchanges_;
     BasicStrategyConfig strategy_;

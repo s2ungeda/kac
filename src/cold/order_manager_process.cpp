@@ -55,7 +55,14 @@ int OrderManagerProcess::run() {
     setup_signal_handlers();
 
     // 설정 로드
-    Config::instance().load(config_.config_path);
+    if (config_.config_from_stdin) {
+        if (!Config::instance().load_from_stream(std::cin)) {
+            logger_->error("Failed to load config from stdin");
+            return 1;
+        }
+    } else {
+        Config::instance().load(config_.config_path);
+    }
 
     // 초기화
     try {
@@ -267,6 +274,8 @@ OrderManagerConfig OrderManagerProcess::parse_args(int argc, char* argv[]) {
             cfg.queue_capacity = std::stoull(argv[++i]);
         } else if (arg == "--dry-run") {
             cfg.dry_run = true;
+        } else if (arg == "--config-stdin") {
+            cfg.config_from_stdin = true;
         } else if (arg == "--verbose" || arg == "-v") {
             cfg.verbose = true;
         } else if (arg == "--help" || arg == "-h") {

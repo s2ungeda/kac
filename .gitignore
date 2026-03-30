@@ -45,6 +45,13 @@ secrets/
 *.pem
 *.key
 
+# SOPS + age
+secrets.yaml
+secrets.*.yaml
+!secrets.enc.yaml
+!secrets.yaml.template
+*.age
+
 # Test artifacts
 test_results/
 coverage/

@@ -35,7 +35,14 @@ int MonitorProcess::run() {
     logger_->info("Monitor starting");
 
     setup_signal_handlers();
-    Config::instance().load(config_.config_path);
+    if (config_.config_from_stdin) {
+        if (!Config::instance().load_from_stream(std::cin)) {
+            logger_->error("Failed to load config from stdin");
+            return 1;
+        }
+    } else {
+        Config::instance().load(config_.config_path);
+    }
 
     // UDS 서버 시작 (모든 프로세스 이벤트 수신)
     server_ = std::make_unique<UnixSocketServer>(config_.monitor_socket);
@@ -168,6 +175,8 @@ MonitorConfig MonitorProcess::parse_args(int argc, char* argv[]) {
             cfg.monitor_socket = argv[++i];
         } else if ((arg == "--tcp-port") && i + 1 < argc) {
             cfg.tcp_port = std::stoi(argv[++i]);
+        } else if (arg == "--config-stdin") {
+            cfg.config_from_stdin = true;
         } else if (arg == "--verbose" || arg == "-v") {
             cfg.verbose = true;
         } else if (arg == "--help" || arg == "-h") {

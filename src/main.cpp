@@ -10,6 +10,7 @@
  */
 
 // === Core ===
+#include "arbitrage/common/runtime_keystore.hpp"
 #include "arbitrage/common/config.hpp"
 #include "arbitrage/common/logger.hpp"
 #include "arbitrage/common/fxrate.hpp"
@@ -110,18 +111,20 @@ struct AppOptions {
     RunMode mode = RunMode::Standalone;
     bool dry_run = false;
     bool verbose = false;
+    bool config_from_stdin = false;
 };
 
 AppOptions parse_args(int argc, char* argv[]) {
     AppOptions opts;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--dry-run")         opts.dry_run = true;
-        else if (arg == "--verbose")    opts.verbose = true;
-        else if (arg == "--standalone") opts.mode = RunMode::Standalone;
-        else if (arg == "--engine")     opts.mode = RunMode::Engine;
+        if (arg == "--dry-run")             opts.dry_run = true;
+        else if (arg == "--verbose")        opts.verbose = true;
+        else if (arg == "--standalone")     opts.mode = RunMode::Standalone;
+        else if (arg == "--engine")         opts.mode = RunMode::Engine;
+        else if (arg == "--config-stdin")   opts.config_from_stdin = true;
         else if (arg == "--config" && i + 1 < argc) opts.config_path = argv[++i];
-        else if (arg[0] != '-')         opts.config_path = arg;
+        else if (arg[0] != '-')             opts.config_path = arg;
     }
     return opts;
 }
@@ -566,10 +569,21 @@ int main(int argc, char* argv[]) {
     std::cout << "==============================================\n\n";
 
     logger->info("Starting Kimchi Arbitrage System (mode={})", mode_str);
-    logger->info("Config: {}", opts.config_path);
     if (opts.dry_run) logger->warn("DRY RUN MODE - No real orders will be placed");
 
-    Config::instance().load(opts.config_path);
+    if (opts.config_from_stdin) {
+        logger->info("Config: stdin (SOPS pipeline)");
+        if (!Config::instance().load_from_stream(std::cin)) {
+            logger->error("Failed to load config from stdin");
+            return 1;
+        }
+    } else {
+        logger->info("Config: {}", opts.config_path);
+        Config::instance().load(opts.config_path);
+    }
+
+    // 프로세스 보안 강화 (core dump 비활성화)
+    RuntimeKeyStore::harden_process();
 
     // =========================================================================
     // 2. 시스템 인프라

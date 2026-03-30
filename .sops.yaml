@@ -1,0 +1,11 @@
+# SOPS Configuration
+# 팀원의 age 공개키를 아래에 등록
+# 등록된 공개키 소유자만 secrets.enc.yaml 복호화 가능
+#
+# 팀원 추가: 공개키를 age 목록에 추가 후 `sops updatekeys secrets.enc.yaml`
+# 팀원 제거: 공개키 삭제 후 `sops updatekeys secrets.enc.yaml` + API 키 로테이션
+
+creation_rules:
+  - path_regex: secrets.*\.yaml$
+    age: >-
+      age1g0fttdejpw3e8l0p5v6759jp2yvsk8x8h58utv8v9ndhqswetagsavszac

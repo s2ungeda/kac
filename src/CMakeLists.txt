@@ -8,6 +8,7 @@ add_library(common
     common/fee_calculator.cpp
     common/config_watcher.cpp
     common/secrets.cpp
+    common/runtime_keystore.cpp
     common/account_manager.cpp
     common/symbol_master.cpp
     common/thread_manager.cpp
@@ -87,8 +88,10 @@ if(TARGET spdlog::spdlog)
     target_link_libraries(common PUBLIC spdlog::spdlog)
 endif()
 
-if(TARGET yaml-cpp)
+find_package(yaml-cpp QUIET)
+if(yaml-cpp_FOUND)
     target_link_libraries(common PUBLIC yaml-cpp)
+    target_compile_definitions(common PUBLIC HAS_YAML_CPP)
 endif()
 
 # CURL 링크 (HTTP client에 필요)

@@ -49,6 +49,7 @@ struct FeederConfig {
 
     // 설정
     std::string config_path{"config/config.yaml"};
+    bool config_from_stdin{false};
     bool verbose{false};
 };
 

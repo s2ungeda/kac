@@ -26,6 +26,7 @@ namespace arbitrage {
 struct RiskManagerConfig {
     std::string risk_socket{ipc_paths::RISK_SOCKET};
     std::string config_path{"config/config.yaml"};
+    bool config_from_stdin{false};
     double daily_loss_limit{100000.0};   // KRW
     double warning_pct{0.7};             // 70% 경고
     bool verbose{false};
