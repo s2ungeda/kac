@@ -1,8 +1,14 @@
 /**
  * Decision Engine Implementation (TASK_13)
+ *
+ * 오케스트레이터: 평가와 수량 계산을 서브 컴포넌트에 위임
+ * - OpportunityEvaluator: 프리미엄/리스크/잔액 검증, 신뢰도 계산
+ * - QuantityOptimizer: 최적 수량, 포지션 사이징
  */
 
 #include "arbitrage/strategy/decision_engine.hpp"
+#include "arbitrage/strategy/opportunity_evaluator.hpp"
+#include "arbitrage/strategy/quantity_optimizer.hpp"
 
 #include <iostream>
 #include <iomanip>
@@ -20,10 +26,12 @@ DecisionEngine& decision_engine() {
 }
 
 // =============================================================================
-// 생성자
+// 생성자 / 소멸자
 // =============================================================================
 DecisionEngine::DecisionEngine(const StrategyConfig& config)
     : config_(config)
+    , evaluator_(std::make_unique<OpportunityEvaluator>(config_))
+    , qty_optimizer_(std::make_unique<QuantityOptimizer>(config_))
 {
     // 잔액 초기화
     for (int i = 0; i < 4; ++i) {
@@ -36,6 +44,8 @@ DecisionEngine::DecisionEngine(const StrategyConfig& config)
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             now.time_since_epoch()).count());
 }
+
+DecisionEngine::~DecisionEngine() = default;
 
 // =============================================================================
 // 기회 평가
@@ -58,8 +68,8 @@ DecisionResult DecisionEngine::evaluate(const PremiumInfo& opportunity) {
         return result;
     }
 
-    // 3. 프리미엄 검증
-    if (!check_premium(opportunity, result)) {
+    // 3. 프리미엄 검증 (OpportunityEvaluator에 위임)
+    if (!evaluator_->check_premium(opportunity, result, stats_)) {
         return result;
     }
 
@@ -76,28 +86,32 @@ DecisionResult DecisionEngine::evaluate(const PremiumInfo& opportunity) {
         result.risk_assessment = risk;
         result.risk_score = risk.score;
 
-        // 5. 리스크 검증
-        if (!check_risk_limits(risk, result)) {
+        // 5. 리스크 검증 (OpportunityEvaluator에 위임)
+        if (!evaluator_->check_risk_limits(risk, result, stats_)) {
             return result;
         }
     }
 
-    // 6. 최적 수량 계산
-    double optimal_qty = calculate_optimal_qty(opportunity, &risk);
+    // 6. 최적 수량 계산 (QuantityOptimizer에 위임)
+    double optimal_qty = qty_optimizer_->calculate_optimal_qty(
+        opportunity, &risk, balances_, balance_mutex_);
     result.optimal_qty = optimal_qty;
 
-    // 7. 잔액 검증
-    if (!check_balance(
+    // 7. 잔액 검증 (OpportunityEvaluator에 위임)
+    if (!evaluator_->check_balance(
             opportunity.buy_exchange,
             opportunity.sell_exchange,
             optimal_qty,
             opportunity.buy_price,
-            result)) {
+            balances_,
+            balance_mutex_,
+            result,
+            stats_)) {
         return result;
     }
 
-    // 8. 신뢰도 계산
-    result.confidence = calculate_confidence(opportunity, risk, optimal_qty);
+    // 8. 신뢰도 계산 (OpportunityEvaluator에 위임)
+    result.confidence = evaluator_->calculate_confidence(opportunity, risk, optimal_qty);
 
     if (result.confidence < config_.min_confidence) {
         result.decision = Decision::Skip;
@@ -162,8 +176,8 @@ DecisionResult DecisionEngine::evaluate_with_orderbook(
         return result;
     }
 
-    // 3. 프리미엄 검증
-    if (!check_premium(opportunity, result)) {
+    // 3. 프리미엄 검증 (OpportunityEvaluator에 위임)
+    if (!evaluator_->check_premium(opportunity, result, stats_)) {
         return result;
     }
 
@@ -182,8 +196,8 @@ DecisionResult DecisionEngine::evaluate_with_orderbook(
         result.risk_assessment = risk;
         result.risk_score = risk.score;
 
-        // 5. 리스크 검증
-        if (!check_risk_limits(risk, result)) {
+        // 5. 리스크 검증 (OpportunityEvaluator에 위임)
+        if (!evaluator_->check_risk_limits(risk, result, stats_)) {
             return result;
         }
     }
@@ -216,8 +230,8 @@ DecisionResult DecisionEngine::evaluate_with_orderbook(
         }
     }
 
-    // 7. 포지션 사이징 적용
-    optimal_qty = apply_position_sizing(optimal_qty, &risk);
+    // 7. 포지션 사이징 적용 (QuantityOptimizer에 위임)
+    optimal_qty = qty_optimizer_->apply_position_sizing(optimal_qty, &risk);
     result.optimal_qty = optimal_qty;
 
     if (optimal_qty < config_.min_order_qty) {
@@ -227,18 +241,21 @@ DecisionResult DecisionEngine::evaluate_with_orderbook(
         return result;
     }
 
-    // 8. 잔액 검증
-    if (!check_balance(
+    // 8. 잔액 검증 (OpportunityEvaluator에 위임)
+    if (!evaluator_->check_balance(
             opportunity.buy_exchange,
             opportunity.sell_exchange,
             optimal_qty,
             opportunity.buy_price,
-            result)) {
+            balances_,
+            balance_mutex_,
+            result,
+            stats_)) {
         return result;
     }
 
-    // 9. 신뢰도 계산
-    result.confidence = calculate_confidence(opportunity, risk, optimal_qty);
+    // 9. 신뢰도 계산 (OpportunityEvaluator에 위임)
+    result.confidence = evaluator_->calculate_confidence(opportunity, risk, optimal_qty);
 
     if (result.confidence < config_.min_confidence) {
         result.decision = Decision::Skip;
@@ -271,57 +288,26 @@ DecisionResult DecisionEngine::evaluate_with_orderbook(
 }
 
 // =============================================================================
-// 최적 수량 계산
+// 최적 수량 계산 (공개 API — QuantityOptimizer에 위임)
 // =============================================================================
 double DecisionEngine::calculate_optimal_qty(
     const PremiumInfo& opportunity,
     const RiskAssessment* risk
 ) {
-    double qty = config_.base_order_qty;
-
-    // 잔액 기반 최대 수량
-    double max_by_balance = calculate_max_qty_by_balance(
-        opportunity.buy_exchange,
-        opportunity.sell_exchange,
-        opportunity.buy_price
-    );
-
-    qty = std::min(qty, max_by_balance);
-
-    // 포지션 사이징 적용
-    qty = apply_position_sizing(qty, risk);
-
-    // 범위 제한
-    qty = std::clamp(qty, config_.min_order_qty, config_.max_order_qty);
-
-    return qty;
+    return qty_optimizer_->calculate_optimal_qty(
+        opportunity, risk, balances_, balance_mutex_);
 }
 
 // =============================================================================
-// 잔액 기반 최대 수량
+// 잔액 기반 최대 수량 (공개 API — QuantityOptimizer에 위임)
 // =============================================================================
 double DecisionEngine::calculate_max_qty_by_balance(
     Exchange buy_ex,
     Exchange sell_ex,
     double buy_price
 ) {
-    std::shared_lock lock(balance_mutex_);
-
-    const auto& buy_balance = balances_[static_cast<int>(buy_ex)];
-    const auto& sell_balance = balances_[static_cast<int>(sell_ex)];
-
-    // 매수: quote 통화 (KRW/USDT) 필요
-    // 예비금 제외
-    double available_quote = buy_balance.available_quote *
-                             (100.0 - config_.reserve_balance_pct) / 100.0;
-    double max_by_buy = buy_price > 0 ? available_quote / buy_price : 0.0;
-
-    // 매도: base 통화 (XRP) 필요
-    double available_base = sell_balance.available_base *
-                            (100.0 - config_.reserve_balance_pct) / 100.0;
-    double max_by_sell = available_base;
-
-    return std::min(max_by_buy, max_by_sell);
+    return qty_optimizer_->calculate_max_qty_by_balance(
+        buy_ex, sell_ex, buy_price, balances_, balance_mutex_);
 }
 
 // =============================================================================
@@ -428,6 +414,8 @@ void DecisionEngine::start_cooldown(std::chrono::milliseconds duration) {
 // =============================================================================
 void DecisionEngine::set_config(const StrategyConfig& config) {
     config_ = config;
+    evaluator_->set_config(config_);
+    qty_optimizer_->set_config(config_);
 }
 
 // =============================================================================
@@ -462,117 +450,6 @@ bool DecisionEngine::check_preconditions(DecisionResult& result) {
 }
 
 // =============================================================================
-// 프리미엄 검증
-// =============================================================================
-bool DecisionEngine::check_premium(const PremiumInfo& opp, DecisionResult& result) {
-    // 최소 프리미엄 확인
-    if (opp.premium_pct < config_.min_premium_pct) {
-        result.decision = Decision::Wait;
-        result.reason = DecisionReason::InsufficientPremium;
-        ++stats_.waits;
-        return false;
-    }
-
-    // 비정상 프리미엄 확인 (너무 높으면 의심)
-    if (opp.premium_pct > config_.max_premium_pct) {
-        result.decision = Decision::Skip;
-        result.reason = DecisionReason::InvalidOpportunity;
-        ++stats_.skips;
-        return false;
-    }
-
-    return true;
-}
-
-// =============================================================================
-// 리스크 검증
-// =============================================================================
-bool DecisionEngine::check_risk_limits(const RiskAssessment& risk, DecisionResult& result) {
-    // 리스크 점수 확인
-    if (risk.score > config_.max_risk_score) {
-        result.decision = Decision::Skip;
-        result.reason = DecisionReason::HighRiskScore;
-        ++stats_.skips;
-        return false;
-    }
-
-    // 기대 수익 확인
-    if (risk.expected_profit_pct < 0) {
-        result.decision = Decision::Skip;
-        result.reason = DecisionReason::NegativeExpectedProfit;
-        ++stats_.skips;
-        return false;
-    }
-
-    // 수익 확률 확인
-    if (risk.profit_probability < config_.min_profit_probability) {
-        result.decision = Decision::Skip;
-        result.reason = DecisionReason::LowProfitProbability;
-        ++stats_.skips;
-        return false;
-    }
-
-    return true;
-}
-
-// =============================================================================
-// 잔액 검증
-// =============================================================================
-bool DecisionEngine::check_balance(
-    Exchange buy_ex,
-    Exchange sell_ex,
-    double qty,
-    double price,
-    DecisionResult& result
-) {
-    std::shared_lock lock(balance_mutex_);
-
-    const auto& buy_balance = balances_[static_cast<int>(buy_ex)];
-    const auto& sell_balance = balances_[static_cast<int>(sell_ex)];
-
-    // 매수에 필요한 quote 통화
-    double required_quote = qty * price;
-    if (buy_balance.available_quote < required_quote) {
-        result.decision = Decision::Skip;
-        result.reason = DecisionReason::InsufficientBalance;
-        ++stats_.skips;
-        return false;
-    }
-
-    // 매도에 필요한 base 통화
-    if (sell_balance.available_base < qty) {
-        result.decision = Decision::Skip;
-        result.reason = DecisionReason::InsufficientBalance;
-        ++stats_.skips;
-        return false;
-    }
-
-    return true;
-}
-
-// =============================================================================
-// 포지션 사이징
-// =============================================================================
-double DecisionEngine::apply_position_sizing(double base_qty, const RiskAssessment* risk) {
-    double qty = base_qty;
-
-    if (risk) {
-        // 리스크에 따른 수량 조정
-        // 리스크 높을수록 수량 감소
-        double risk_factor = 1.0 - (risk->score / 100.0) * 0.5;
-        qty *= risk_factor;
-
-        // 수익 확률에 따른 조정
-        qty *= risk->profit_probability;
-    }
-
-    // 최소/최대 제한
-    qty = std::clamp(qty, config_.min_order_qty, config_.max_order_qty);
-
-    return qty;
-}
-
-// =============================================================================
 // 주문 요청 생성
 // =============================================================================
 DualOrderRequest DecisionEngine::create_order_request(
@@ -602,34 +479,6 @@ DualOrderRequest DecisionEngine::create_order_request(
     request.sell_order.price = opp.sell_price;  // KRW 가격
 
     return request;
-}
-
-// =============================================================================
-// 신뢰도 계산
-// =============================================================================
-double DecisionEngine::calculate_confidence(
-    const PremiumInfo& opp,
-    const RiskAssessment& risk,
-    double qty
-) {
-    double confidence = 0.5;  // 기본값
-
-    // 프리미엄 기반 신뢰도 (목표 대비)
-    double premium_factor = opp.premium_pct / config_.target_premium_pct;
-    premium_factor = std::min(premium_factor, 2.0);  // 최대 2배
-    confidence += premium_factor * 0.15;
-
-    // 리스크 기반 신뢰도
-    double risk_factor = 1.0 - risk.score / 100.0;
-    confidence += risk_factor * 0.2;
-
-    // 수익 확률 반영
-    confidence += risk.profit_probability * 0.15;
-
-    // 범위 제한
-    confidence = std::clamp(confidence, 0.0, 1.0);
-
-    return confidence;
 }
 
 // =============================================================================

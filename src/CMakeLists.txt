@@ -39,6 +39,8 @@ add_library(strategy
     strategy/slippage_model.cpp
     strategy/orderbook_analyzer.cpp
     strategy/risk_model.cpp
+    strategy/opportunity_evaluator.cpp
+    strategy/quantity_optimizer.cpp
     strategy/decision_engine.cpp
     strategy/strategy_executor.cpp
     strategy/strategies/basic_arb_strategy.cpp

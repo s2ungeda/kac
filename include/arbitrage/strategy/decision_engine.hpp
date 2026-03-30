@@ -3,11 +3,10 @@
 /**
  * Decision Engine (TASK_13)
  *
- * 아비트라지 기회 평가 및 실행 결정
- * - 기회 평가 로직
- * - 최적 수량 계산
- * - 리스크 검증
- * - 킬스위치 연동
+ * 아비트라지 기회 평가 및 실행 결정 (오케스트레이터)
+ * - 기회 평가 → OpportunityEvaluator에 위임
+ * - 최적 수량 계산 → QuantityOptimizer에 위임
+ * - 킬스위치, 쿨다운, 거래 이력 관리
  */
 
 #include "arbitrage/common/types.hpp"
@@ -19,10 +18,15 @@
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <memory>
 #include <string>
 #include <shared_mutex>
 
 namespace arbitrage {
+
+// 전방 선언
+class OpportunityEvaluator;
+class QuantityOptimizer;
 
 // =============================================================================
 // 결정 타입
@@ -181,7 +185,7 @@ struct BalanceInfo {
 class DecisionEngine {
 public:
     explicit DecisionEngine(const StrategyConfig& config = {});
-    ~DecisionEngine() = default;
+    ~DecisionEngine();
 
     // 복사/이동 금지
     DecisionEngine(const DecisionEngine&) = delete;
@@ -337,20 +341,8 @@ public:
     void print_decision(const DecisionResult& result) const;
 
 private:
-    // 전제 조건 확인
+    // 전제 조건 확인 (킬스위치, 쿨다운)
     bool check_preconditions(DecisionResult& result);
-
-    // 프리미엄 검증
-    bool check_premium(const PremiumInfo& opp, DecisionResult& result);
-
-    // 리스크 검증
-    bool check_risk_limits(const RiskAssessment& risk, DecisionResult& result);
-
-    // 잔액 검증
-    bool check_balance(Exchange buy_ex, Exchange sell_ex, double qty, double price, DecisionResult& result);
-
-    // 포지션 사이징 적용
-    double apply_position_sizing(double base_qty, const RiskAssessment* risk);
 
     // 주문 요청 생성
     DualOrderRequest create_order_request(
@@ -360,15 +352,12 @@ private:
         OrderType sell_type
     );
 
-    // 신뢰도 계산
-    double calculate_confidence(
-        const PremiumInfo& opp,
-        const RiskAssessment& risk,
-        double qty
-    );
-
     // 멤버 변수
     StrategyConfig config_;
+
+    // 서브 컴포넌트
+    std::unique_ptr<OpportunityEvaluator> evaluator_;
+    std::unique_ptr<QuantityOptimizer> qty_optimizer_;
 
     // 킬스위치
     std::atomic<bool> kill_switch_{false};
