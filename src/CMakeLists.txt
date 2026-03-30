@@ -173,13 +173,18 @@ target_link_libraries(ops
         Threads::Threads
 )
 
-# 메인 실행 파일
-add_executable(arbitrage
-    main.cpp
+# App 라이브러리 (Application 클래스 + 스레드 클래스)
+add_library(app
+    app/application.cpp
+    app/hot_thread.cpp
+    app/order_thread.cpp
+    app/display_thread.cpp
 )
 
-target_link_libraries(arbitrage
-    PRIVATE
+target_include_directories(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/app)
+
+target_link_libraries(app
+    PUBLIC
         common
         strategy
         executor
@@ -191,20 +196,30 @@ target_link_libraries(arbitrage
         Threads::Threads
 )
 
-# OpenSSL 링크
-if(OpenSSL_FOUND)
-    target_link_libraries(arbitrage PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-endif()
-
-# Boost 링크
+# Boost 링크 (Application에서 io_context, ssl_context 사용)
 if(Boost_FOUND)
-    target_link_libraries(arbitrage PRIVATE ${Boost_LIBRARIES})
+    target_link_libraries(app PUBLIC ${Boost_LIBRARIES})
 endif()
 
-# CURL 링크
-if(CURL_FOUND)
-    target_link_libraries(arbitrage PRIVATE ${CURL_LIBRARIES})
+# OpenSSL 링크 (SSL context)
+if(OpenSSL_FOUND)
+    target_link_libraries(app PUBLIC OpenSSL::SSL OpenSSL::Crypto)
 endif()
+
+# CURL 링크 (FXRateService 등)
+if(CURL_FOUND)
+    target_link_libraries(app PUBLIC ${CURL_LIBRARIES})
+endif()
+
+# 메인 실행 파일
+add_executable(arbitrage
+    main.cpp
+)
+
+target_link_libraries(arbitrage
+    PRIVATE
+        app
+)
 
 # SQLite3 링크
 if(SQLite3_FOUND)
