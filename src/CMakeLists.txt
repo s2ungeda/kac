@@ -56,6 +56,8 @@ add_library(infra
     infra/event_bus.cpp
     infra/shutdown.cpp
     infra/health_check.cpp
+    infra/tcp_protocol.cpp
+    infra/tcp_client_manager.cpp
     infra/tcp_server.cpp
     infra/watchdog_client.cpp
     infra/watchdog.cpp
