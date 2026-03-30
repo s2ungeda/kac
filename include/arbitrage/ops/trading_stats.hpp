@@ -8,9 +8,13 @@
  * - 승률, 손익비, 샤프 비율
  * - 드로다운 추적
  * - 파일 기반 저장
+ *
+ * Delegates calculation to StatsCalculator and I/O to StatsReporter.
  */
 
 #include "arbitrage/ops/daily_limit.hpp"
+#include "arbitrage/ops/stats_calculator.hpp"
+#include "arbitrage/ops/stats_reporter.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -507,24 +511,6 @@ private:
     // =========================================================================
 
     /**
-     * 통계 계산 (기간별)
-     */
-    TradingStats calculate_stats(
-        const std::vector<ExtendedTradeRecord>& trades,
-        StatsPeriod period
-    ) const;
-
-    /**
-     * 드로다운 업데이트
-     */
-    void update_drawdown(double pnl_krw);
-
-    /**
-     * 연속 기록 업데이트
-     */
-    void update_streak(bool is_win);
-
-    /**
      * 일별 마감 처리
      */
     void process_daily_close();
@@ -534,31 +520,12 @@ private:
      */
     void auto_save_thread();
 
-    /**
-     * CSV 파싱 헬퍼
-     */
-    std::vector<std::string> parse_csv_line(const std::string& line) const;
-
-    /**
-     * 날짜 비교 헬퍼
-     */
-    bool is_same_day(
-        std::chrono::system_clock::time_point t1,
-        std::chrono::system_clock::time_point t2
-    ) const;
-
-    bool is_same_week(
-        std::chrono::system_clock::time_point t1,
-        std::chrono::system_clock::time_point t2
-    ) const;
-
-    bool is_same_month(
-        std::chrono::system_clock::time_point t1,
-        std::chrono::system_clock::time_point t2
-    ) const;
-
 private:
     TradingStatsConfig config_;
+
+    // Sub-components
+    StatsCalculator calculator_;
+    StatsReporter reporter_;
 
     // 거래 기록
     mutable std::mutex trades_mutex_;

@@ -78,6 +78,8 @@ add_library(ops
     ops/alert.cpp
     ops/daily_limit.cpp
     ops/trading_stats.cpp
+    ops/stats_calculator.cpp
+    ops/stats_reporter.cpp
 )
 
 # 공통 라이브러리 링크
