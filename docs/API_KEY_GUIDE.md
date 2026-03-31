@@ -40,124 +40,104 @@ Public key: age1abc123def456...
 ### 3. 공개키 등록
 
 ```bash
-# .sops.yaml 편집 — age: 줄에 공개키 추가
-vi .sops.yaml
-```
+# CLI로 등록 (권장)
+./scripts/secrets.sh add-user "내이름" "age1abc123def456..."
 
-```yaml
-creation_rules:
-  - path_regex: secrets.*\.yaml$
-    age: >-
-      age1abc123def456...
+# 또는 수동 편집
+vi .sops.yaml
 ```
 
 ---
 
-## API 키 등록 (신규)
+## secrets.sh CLI
 
-### 방법 A: 템플릿에서 생성 (최초)
+`scripts/secrets.sh`로 모든 키 관리 작업을 수행할 수 있음.
 
 ```bash
-# 1. 템플릿 복사
+./scripts/secrets.sh help
+```
+
+### 명령어 요약
+
+| 명령어 | 설명 | 예시 |
+|--------|------|------|
+| `list` | 등록된 전체 계정 목록 | `secrets.sh list` |
+| `get` | 특정 거래소 키 조회 (마스킹) | `secrets.sh get upbit` |
+| `set` | 특정 필드 값 변경 | `secrets.sh set upbit api_key "NEW_KEY"` |
+| `edit` | 에디터로 전체 편집 | `secrets.sh edit` |
+| `add-account` | 계정 추가 | `secrets.sh add-account upbit upbit_sub "보조" "KEY" "SECRET" 0.5` |
+| `remove-account` | 계정 삭제 | `secrets.sh remove-account upbit upbit_sub` |
+| `add-user` | 팀원 공개키 등록 | `secrets.sh add-user "홍길동" "age1abc..."` |
+| `remove-user` | 팀원 제거 | `secrets.sh remove-user "홍길동"` |
+| `verify` | 복호화 테스트 | `secrets.sh verify` |
+
+---
+
+## API 키 등록
+
+### 방법 A: CLI로 계정 추가 (권장)
+
+```bash
+# 업비트
+./scripts/secrets.sh add-account upbit upbit_main "메인 계정" "ACCESS_KEY" "SECRET_KEY" 1.0
+
+# 빗썸
+./scripts/secrets.sh add-account bithumb bithumb_main "메인 계정" "API_KEY" "SECRET_KEY" 1.0
+
+# 바이낸스
+./scripts/secrets.sh add-account binance binance_main "선물 메인" "API_KEY" "SECRET_KEY" 1.0
+
+# MEXC
+./scripts/secrets.sh add-account mexc mexc_main "메인 계정" "API_KEY" "SECRET_KEY" 1.0
+```
+
+### 방법 B: 템플릿에서 최초 생성
+
+```bash
+# 1. 템플릿 복사 → 실제 키 입력
 cp secrets.yaml.template secrets.yaml
-
-# 2. 실제 키 입력
 vi secrets.yaml
-```
 
-```yaml
-exchanges:
-  upbit:
-    accounts:
-      - id: "upbit_main"
-        label: "메인 계정"
-        api_key: "실제_업비트_ACCESS_KEY"
-        api_secret: "실제_업비트_SECRET_KEY"
-        weight: 1.0
-
-  bithumb:
-    accounts:
-      - id: "bithumb_main"
-        label: "메인 계정"
-        api_key: "실제_빗썸_API_KEY"
-        api_secret: "실제_빗썸_SECRET_KEY"
-        weight: 1.0
-
-  binance:
-    accounts:
-      - id: "binance_main"
-        label: "선물 메인"
-        api_key: "실제_바이낸스_API_KEY"
-        api_secret: "실제_바이낸스_SECRET_KEY"
-        weight: 1.0
-
-  mexc:
-    accounts:
-      - id: "mexc_main"
-        label: "메인 계정"
-        api_key: "실제_MEXC_API_KEY"
-        api_secret: "실제_MEXC_SECRET_KEY"
-        weight: 1.0
-
-alert:
-  telegram_token: "텔레그램_봇_토큰"
-  telegram_chat_id: "텔레그램_채팅_ID"
-
-server:
-  auth_token: "TCP_서버_인증_토큰"
-```
-
-```bash
-# 3. 암호화
+# 2. 암호화 후 평문 삭제
 sops -e secrets.yaml > secrets.enc.yaml
-
-# 4. 평문 즉시 삭제
 rm secrets.yaml
-
-# 5. 확인
-git diff secrets.enc.yaml  # 암호화된 내용 확인
 ```
 
-### 방법 B: sops 에디터로 직접 편집 (권장)
+### 방법 C: 에디터로 직접 편집
 
 ```bash
-# sops가 자동으로 복호화 → 에디터 → 재암호화
-sops secrets.enc.yaml
+./scripts/secrets.sh edit
+# 또는: sops secrets.enc.yaml
 ```
 
-`$EDITOR` (기본: vim)가 열리면 평문 YAML이 표시됨. 편집 후 저장하면 자동 재암호화.
+에디터가 열리면 평문 YAML이 표시됨. 편집 후 저장하면 자동 재암호화.
 
 ---
 
 ## API 키 조회
 
-### 전체 키 확인 (복호화)
-
 ```bash
-# 터미널에 평문 출력 (주의: 화면에 노출됨)
-sops -d secrets.enc.yaml
+# 전체 계정 목록 (키 값 마스킹됨)
+./scripts/secrets.sh list
+
+# 특정 거래소 상세 조회 (키 앞4자리...뒤4자리로 마스킹)
+./scripts/secrets.sh get upbit
+./scripts/secrets.sh get binance
+
+# 특정 필드만 조회 (평문 노출)
+./scripts/secrets.sh get upbit api_key
 ```
 
-### 특정 거래소만 확인
+### sops 직접 사용
 
 ```bash
-# 업비트 키만
+# 전체 평문 출력 (주의: 화면에 노출)
+sops -d secrets.enc.yaml
+
+# 특정 거래소만
 sops -d secrets.enc.yaml | yq '.exchanges.upbit'
 
-# 바이낸스 키만
-sops -d secrets.enc.yaml | yq '.exchanges.binance'
-
-# 알림 설정만
-sops -d secrets.enc.yaml | yq '.alert'
-```
-
-### 키 이름만 확인 (값 숨김)
-
-```bash
-# 어떤 거래소가 등록되어 있는지만 확인
-sops -d secrets.enc.yaml | yq '.exchanges | keys'
-
-# 각 거래소 계정 ID만 확인
+# 계정 ID만 (값 숨김)
 sops -d secrets.enc.yaml | yq '.exchanges[].accounts[].id'
 ```
 
@@ -165,82 +145,56 @@ sops -d secrets.enc.yaml | yq '.exchanges[].accounts[].id'
 
 ## API 키 변경
 
-### 방법 A: sops 에디터 (권장)
-
 ```bash
-sops secrets.enc.yaml
-# → 에디터에서 해당 키 값 수정 → 저장 → 자동 재암호화
-```
+# CLI로 특정 필드 변경
+./scripts/secrets.sh set upbit api_key "NEW_ACCESS_KEY"
+./scripts/secrets.sh set upbit api_secret "NEW_SECRET_KEY"
 
-### 방법 B: yq로 특정 값만 변경
+# 두 번째 계정(index 1) 변경
+./scripts/secrets.sh set binance api_key "NEW_KEY" 1
 
-```bash
-# 1. 복호화
-sops -d secrets.enc.yaml > secrets.yaml
-
-# 2. yq로 특정 값 변경
-yq -i '.exchanges.upbit.accounts[0].api_key = "NEW_KEY_HERE"' secrets.yaml
-yq -i '.exchanges.upbit.accounts[0].api_secret = "NEW_SECRET_HERE"' secrets.yaml
-
-# 3. 재암호화
-sops -e secrets.yaml > secrets.enc.yaml
-
-# 4. 평문 삭제
-rm secrets.yaml
+# 에디터로 변경
+./scripts/secrets.sh edit
 ```
 
 ---
 
 ## API 키 삭제
 
-### 특정 거래소 삭제
-
 ```bash
-sops secrets.enc.yaml
-# → 에디터에서 해당 거래소 블록 전체 삭제 → 저장
-```
+# 특정 계정 삭제
+./scripts/secrets.sh remove-account upbit upbit_sub
 
-### 특정 계정만 삭제 (다중 계정 중 하나)
-
-```bash
-sops secrets.enc.yaml
-# → 에디터에서 해당 accounts 항목만 삭제 → 저장
-```
-
-### yq로 삭제
-
-```bash
-sops -d secrets.enc.yaml > secrets.yaml
-yq -i 'del(.exchanges.mexc)' secrets.yaml
-sops -e secrets.yaml > secrets.enc.yaml
-rm secrets.yaml
+# 에디터로 삭제
+./scripts/secrets.sh edit
+# → 해당 거래소/계정 블록 삭제 → 저장
 ```
 
 ---
 
-## 계정 추가 (다중 계정)
+## 다중 계정
 
-거래소당 여러 계정을 등록할 수 있음. `weight`로 주문 분배 비율 설정.
+거래소당 여러 계정 등록 가능. `weight`로 주문 분배 비율 설정.
 
 ```bash
-sops secrets.enc.yaml
+# 메인 계정 (weight 1.0)
+./scripts/secrets.sh add-account upbit upbit_main "메인" "KEY1" "SECRET1" 1.0
+
+# 보조 계정 (weight 0.5 → 메인의 절반 비율로 주문)
+./scripts/secrets.sh add-account upbit upbit_sub "보조" "KEY2" "SECRET2" 0.5
 ```
 
-```yaml
-exchanges:
-  upbit:
-    accounts:
-      - id: "upbit_main"
-        label: "메인 계정"
-        api_key: "MAIN_KEY"
-        api_secret: "MAIN_SECRET"
-        weight: 1.0
+---
 
-      - id: "upbit_sub"        # 추가
-        label: "보조 계정"
-        api_key: "SUB_KEY"
-        api_secret: "SUB_SECRET"
-        weight: 0.5
+## 팀원 관리
+
+```bash
+# 팀원 추가 (공개키 등록 + 재암호화)
+./scripts/secrets.sh add-user "홍길동" "age1abc123..."
+
+# 팀원 제거 (공개키 삭제 + 재암호화)
+./scripts/secrets.sh remove-user "홍길동"
+# ⚠️ 제거 후 반드시 모든 API 키 로테이션 필요!
 ```
 
 ---
@@ -266,7 +220,12 @@ exchanges:
 
 ---
 
-## 문제 해결
+## 검증 & 문제 해결
+
+```bash
+# 복호화 테스트
+./scripts/secrets.sh verify
+```
 
 ### "Failed to decrypt"
 ```bash
@@ -280,31 +239,20 @@ cat .sops.yaml
 
 ### "sops not found"
 ```bash
-# sops 설치 확인
-which sops
-sops --version
-```
-
-### 키 로테이션 (팀원 변경 시)
-```bash
-# 1. .sops.yaml에서 공개키 추가/삭제
-vi .sops.yaml
-
-# 2. 기존 파일 재암호화
-sops updatekeys secrets.enc.yaml
-
-# 3. 탈퇴한 팀원이 있으면 API 키 자체도 로테이션
-sops secrets.enc.yaml  # 모든 API 키 변경
+which sops && sops --version
 ```
 
 ---
 
 ## 요약
 
-| 작업 | 명령어 |
-|------|--------|
-| **등록** | `sops secrets.enc.yaml` (에디터에서 입력) |
-| **조회** | `sops -d secrets.enc.yaml` |
-| **변경** | `sops secrets.enc.yaml` (에디터에서 수정) |
-| **삭제** | `sops secrets.enc.yaml` (에디터에서 삭제) |
-| **실행** | `./scripts/start.sh --standalone` |
+| 작업 | CLI 명령어 |
+|------|-----------|
+| **목록** | `secrets.sh list` |
+| **조회** | `secrets.sh get <거래소>` |
+| **등록** | `secrets.sh add-account <거래소> <id> <label> <key> <secret> [weight]` |
+| **변경** | `secrets.sh set <거래소> <필드> <값>` |
+| **삭제** | `secrets.sh remove-account <거래소> <id>` |
+| **편집** | `secrets.sh edit` |
+| **검증** | `secrets.sh verify` |
+| **실행** | `start.sh --standalone` |
