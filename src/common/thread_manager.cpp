@@ -42,10 +42,13 @@ std::once_flag ThreadManager::topology_init_flag_;
 // =============================================================================
 // 싱글톤
 // =============================================================================
+namespace { ThreadManager* g_set_thread_manager_override = nullptr; }
 ThreadManager& ThreadManager::instance() {
+    if (g_set_thread_manager_override) return *g_set_thread_manager_override;
     static ThreadManager inst;
     return inst;
 }
+void set_thread_manager(ThreadManager* p) { g_set_thread_manager_override = p; }
 
 ThreadManager::ThreadManager() {
     // 시스템 토폴로지 초기화
@@ -58,7 +61,7 @@ ThreadManager::~ThreadManager() = default;
 // 초기화
 // =============================================================================
 void ThreadManager::initialize(const ThreadManagerConfig& config) {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
     config_ = config;
 
     logger()->info("ThreadManager initialized: affinity={}, priority={}, numa={}",
@@ -419,19 +422,19 @@ std::vector<int> ThreadManager::get_physical_core_ids() {
 // 모니터링
 // =============================================================================
 void ThreadManager::register_thread(const std::string& name, std::thread::id id) {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
     thread_ids_[name] = id;
     active_configs_[name] = config_.get_config(name);
 }
 
 void ThreadManager::unregister_thread(const std::string& name) {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
     thread_ids_.erase(name);
     active_configs_.erase(name);
 }
 
 std::vector<ThreadStats> ThreadManager::get_all_stats() const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
 
     std::vector<ThreadStats> stats;
     stats.reserve(thread_ids_.size());
@@ -457,7 +460,7 @@ std::vector<ThreadStats> ThreadManager::get_all_stats() const {
 }
 
 ThreadStats ThreadManager::get_thread_stats(const std::string& name) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
 
     ThreadStats s;
     s.name = name;
@@ -484,7 +487,7 @@ ThreadStats ThreadManager::get_thread_stats(const std::string& name) const {
 // 런타임 조정
 // =============================================================================
 Result<void> ThreadManager::update_affinity(const std::string& thread_name, int core_id) {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
 
     auto it = thread_ids_.find(thread_name);
     if (it == thread_ids_.end()) {
@@ -501,7 +504,7 @@ Result<void> ThreadManager::update_affinity(const std::string& thread_name, int 
 }
 
 Result<void> ThreadManager::update_priority(const std::string& thread_name, ThreadPriority priority) {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
 
     auto it = thread_ids_.find(thread_name);
     if (it == thread_ids_.end()) {

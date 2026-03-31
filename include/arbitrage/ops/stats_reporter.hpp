@@ -9,9 +9,10 @@
 
 #include <chrono>
 #include <deque>
-#include <mutex>
 #include <string>
 #include <vector>
+
+#include "arbitrage/common/spin_wait.hpp"
 
 namespace arbitrage {
 
@@ -45,7 +46,7 @@ public:
     bool save_trades(
         const TradingStatsConfig& config,
         const std::deque<ExtendedTradeRecord>& trades,
-        std::mutex& trades_mutex
+        RWSpinLock& trades_mutex
     );
 
     /**
@@ -54,7 +55,7 @@ public:
     bool save_daily_stats(
         const TradingStatsConfig& config,
         const std::deque<ExtendedTradeRecord>& trades,
-        std::mutex& trades_mutex
+        RWSpinLock& trades_mutex
     );
 
     // =========================================================================
@@ -69,9 +70,9 @@ public:
         const TradingStatsConfig& config,
         std::deque<ExtendedTradeRecord>& trades,
         size_t& total_trades_ever,
-        std::mutex& trades_mutex,
+        RWSpinLock& trades_mutex,
         TradingStats& all_time_stats,
-        std::mutex& stats_mutex,
+        RWSpinLock& stats_mutex,
         const StatsCalculator& calculator
     );
 
@@ -85,7 +86,7 @@ public:
     std::vector<DailySummary> get_daily_summaries(
         int days,
         const std::deque<ExtendedTradeRecord>& trades,
-        std::mutex& trades_mutex
+        RWSpinLock& trades_mutex
     ) const;
 
     /**
@@ -94,7 +95,7 @@ public:
     std::vector<DailySummary> get_monthly_summaries(
         int months,
         const std::deque<ExtendedTradeRecord>& trades,
-        std::mutex& trades_mutex
+        RWSpinLock& trades_mutex
     ) const;
 
     // =========================================================================

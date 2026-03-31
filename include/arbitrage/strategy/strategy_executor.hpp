@@ -12,13 +12,13 @@
 
 #include "arbitrage/strategy/strategy_interface.hpp"
 #include "arbitrage/strategy/strategy_registry.hpp"
+#include "arbitrage/common/spin_wait.hpp"
 
 #include <map>
 #include <vector>
 #include <memory>
 #include <thread>
 #include <atomic>
-#include <shared_mutex>
 #include <functional>
 #include <chrono>
 
@@ -286,13 +286,13 @@ private:
     StrategyExecutorConfig config_;
 
     // 전략 저장소
-    mutable std::shared_mutex strategies_mutex_;
+    mutable RWSpinLock strategies_mutex_;
     std::map<StrategyId, std::unique_ptr<IStrategy>> strategies_;
     std::map<StrategyId, StrategyConfig> configs_;
     std::map<StrategyId, bool> enabled_;
 
     // 시장 데이터
-    mutable std::shared_mutex market_mutex_;
+    mutable RWSpinLock market_mutex_;
     MarketSnapshot current_snapshot_;
 
     // 실행 제어
@@ -315,7 +315,7 @@ private:
     ExecutionCallback execution_callback_;
 
     // 킬스위치 사유
-    mutable std::shared_mutex kill_reason_mutex_;
+    mutable RWSpinLock kill_reason_mutex_;
     std::string kill_switch_reason_;
 };
 

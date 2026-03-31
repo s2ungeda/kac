@@ -13,10 +13,13 @@
 
 namespace arbitrage {
 
+namespace { Config* g_set_config_instance_override = nullptr; }
 Config& Config::instance() {
+    if (g_set_config_instance_override) return *g_set_config_instance_override;
     static Config instance;
     return instance;
 }
+void set_config_instance(Config* p) { g_set_config_instance_override = p; }
 
 // =============================================================================
 // YAML 문자열 파싱 (load / load_from_stream / reload 공용)
@@ -189,7 +192,7 @@ bool Config::parse_yaml_string(const std::string& yaml_content) {
 // 파일에서 로드
 // =============================================================================
 bool Config::load(const std::string& path) {
-    std::lock_guard lock(mutex_);
+    WriteGuard lock(mutex_);
     config_path_ = path;
     cached_yaml_.clear();
 
@@ -277,7 +280,7 @@ bool Config::load(const std::string& path) {
 // 스트림에서 로드 (SOPS 파이프라인용)
 // =============================================================================
 bool Config::load_from_stream(std::istream& input) {
-    std::lock_guard lock(mutex_);
+    WriteGuard lock(mutex_);
 
     std::string yaml_content(
         (std::istreambuf_iterator<char>(input)),
@@ -306,21 +309,21 @@ bool Config::load_from_stream(std::istream& input) {
 // =============================================================================
 bool Config::reload() {
     if (!cached_yaml_.empty()) {
-        std::lock_guard lock(mutex_);
+        WriteGuard lock(mutex_);
         return parse_yaml_string(cached_yaml_);
     }
     return load(config_path_);
 }
 
 const ExchangeConfig& Config::exchange(Exchange ex) const {
-    std::lock_guard lock(mutex_);
+    ReadGuard lock(mutex_);
     static ExchangeConfig empty;
     auto it = exchanges_.find(ex);
     return it != exchanges_.end() ? it->second : empty;
 }
 
 std::vector<std::string> Config::get_symbols_for_exchange(Exchange ex) const {
-    std::lock_guard lock(mutex_);
+    ReadGuard lock(mutex_);
     std::vector<std::string> result;
 
     for (const auto& symbol : symbols_) {

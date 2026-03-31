@@ -22,7 +22,7 @@ void OrderBookAnalyzer::update(Exchange ex, const OrderBook& ob) {
     if (idx < 0 || idx >= static_cast<int>(Exchange::Count)) return;
 
     {
-        std::unique_lock<std::shared_mutex> lock(mutex_);
+        WriteGuard lock(mutex_);
         orderbooks_[idx] = ob;
         metrics_[idx] = liquidity_calc_.calculate(ob);
     }
@@ -37,7 +37,7 @@ bool OrderBookAnalyzer::get_orderbook(Exchange ex, OrderBook& out) const {
     int idx = static_cast<int>(ex);
     if (idx < 0 || idx >= static_cast<int>(Exchange::Count)) return false;
 
-    std::shared_lock<std::shared_mutex> lock(mutex_);
+    ReadGuard lock(mutex_);
     out = orderbooks_[idx];
     stats_.queries.fetch_add(1, std::memory_order_relaxed);
     return out.bid_count > 0 || out.ask_count > 0;
@@ -49,7 +49,7 @@ LiquidityMetrics OrderBookAnalyzer::get_liquidity(Exchange ex) const {
         return LiquidityMetrics{};
     }
 
-    std::shared_lock<std::shared_mutex> lock(mutex_);
+    ReadGuard lock(mutex_);
     stats_.queries.fetch_add(1, std::memory_order_relaxed);
     return metrics_[idx];
 }
@@ -57,7 +57,7 @@ LiquidityMetrics OrderBookAnalyzer::get_liquidity(Exchange ex) const {
 void OrderBookAnalyzer::get_all_liquidity(LiquidityMetrics* out, int* count) const {
     if (!out || !count) return;
 
-    std::shared_lock<std::shared_mutex> lock(mutex_);
+    ReadGuard lock(mutex_);
     int n = static_cast<int>(Exchange::Count);
     for (int i = 0; i < n; ++i) {
         out[i] = metrics_[i];
@@ -76,7 +76,7 @@ SlippageEstimate OrderBookAnalyzer::estimate_slippage(
         return SlippageEstimate{};
     }
 
-    std::shared_lock<std::shared_mutex> lock(mutex_);
+    ReadGuard lock(mutex_);
     stats_.queries.fetch_add(1, std::memory_order_relaxed);
     return slippage_model_.estimate_taker_slippage(orderbooks_[idx], side, quantity);
 }
@@ -96,7 +96,7 @@ DualOrderPlan OrderBookAnalyzer::plan_maker_taker_order(
     if (buy_idx < 0 || buy_idx >= static_cast<int>(Exchange::Count)) return plan;
     if (sell_idx < 0 || sell_idx >= static_cast<int>(Exchange::Count)) return plan;
 
-    std::shared_lock<std::shared_mutex> lock(mutex_);
+    ReadGuard lock(mutex_);
 
     const auto& buy_ob = orderbooks_[buy_idx];
     const auto& sell_ob = orderbooks_[sell_idx];
@@ -187,12 +187,12 @@ double OrderBookAnalyzer::calculate_breakeven_premium(
 }
 
 void OrderBookAnalyzer::set_alert_callback(LiquidityAlertCallback cb) {
-    std::unique_lock<std::shared_mutex> lock(mutex_);
+    WriteGuard lock(mutex_);
     alert_callback_ = std::move(cb);
 }
 
 void OrderBookAnalyzer::set_config(const OrderBookAnalyzerConfig& config) {
-    std::unique_lock<std::shared_mutex> lock(mutex_);
+    WriteGuard lock(mutex_);
     config_ = config;
 }
 

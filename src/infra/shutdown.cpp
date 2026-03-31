@@ -12,10 +12,13 @@ namespace arbitrage {
 // =============================================================================
 // 싱글톤
 // =============================================================================
+namespace { ShutdownManager* g_set_shutdown_manager_override = nullptr; }
 ShutdownManager& ShutdownManager::instance() {
+    if (g_set_shutdown_manager_override) return *g_set_shutdown_manager_override;
     static ShutdownManager instance;
     return instance;
 }
+void set_shutdown_manager(ShutdownManager* p) { g_set_shutdown_manager_override = p; }
 
 // =============================================================================
 // 생성자/소멸자
@@ -32,7 +35,7 @@ ShutdownManager::~ShutdownManager() {
 // 시그널 핸들러
 // =============================================================================
 void ShutdownManager::install_signal_handlers() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    SpinLockGuard lock(mutex_);
 
     if (handlers_installed_) {
         return;
@@ -48,7 +51,7 @@ void ShutdownManager::install_signal_handlers() {
 }
 
 void ShutdownManager::uninstall_signal_handlers() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    SpinLockGuard lock(mutex_);
 
     if (!handlers_installed_) {
         return;
@@ -110,7 +113,7 @@ void ShutdownManager::register_component(const std::string& name,
                                          ShutdownCallback callback,
                                          int priority,
                                          std::chrono::milliseconds timeout) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    SpinLockGuard lock(mutex_);
 
     // 중복 체크
     auto it = std::find_if(components_.begin(), components_.end(),
@@ -135,7 +138,7 @@ void ShutdownManager::register_component(const std::string& name,
 }
 
 void ShutdownManager::unregister_component(const std::string& name) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    SpinLockGuard lock(mutex_);
 
     components_.erase(
         std::remove_if(components_.begin(), components_.end(),
@@ -144,7 +147,7 @@ void ShutdownManager::unregister_component(const std::string& name) {
 }
 
 size_t ShutdownManager::component_count() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    SpinLockGuard lock(mutex_);
     return components_.size();
 }
 
@@ -169,16 +172,15 @@ void ShutdownManager::initiate_shutdown(const std::string& reason) {
 }
 
 ShutdownResult ShutdownManager::wait_for_shutdown(std::chrono::milliseconds timeout) {
-    std::unique_lock<std::mutex> lock(mutex_);
+    bool completed = SpinWait::until_for([this] {
+        return shutdown_wakeup_.load(std::memory_order_acquire) ||
+               phase_.load(std::memory_order_acquire) == ShutdownPhase::Completed ||
+               phase_.load(std::memory_order_acquire) == ShutdownPhase::Timeout;
+    }, timeout);
+    shutdown_wakeup_.store(false, std::memory_order_release);
 
-    auto deadline = std::chrono::steady_clock::now() + timeout;
-
-    while (phase_.load(std::memory_order_acquire) != ShutdownPhase::Completed &&
-           phase_.load(std::memory_order_acquire) != ShutdownPhase::Timeout) {
-        if (shutdown_cv_.wait_until(lock, deadline) == std::cv_status::timeout) {
-            result_.phase = ShutdownPhase::Timeout;
-            break;
-        }
+    if (!completed) {
+        result_.phase = ShutdownPhase::Timeout;
     }
 
     return result_;
@@ -187,7 +189,7 @@ ShutdownResult ShutdownManager::wait_for_shutdown(std::chrono::milliseconds time
 void ShutdownManager::force_shutdown() {
     shutting_down_.store(true, std::memory_order_release);
     phase_.store(ShutdownPhase::Timeout, std::memory_order_release);
-    shutdown_cv_.notify_all();
+    shutdown_wakeup_.store(true, std::memory_order_release);
 }
 
 bool ShutdownManager::cancel_shutdown() {
@@ -206,12 +208,12 @@ bool ShutdownManager::cancel_shutdown() {
 // 상태 조회
 // =============================================================================
 std::string ShutdownManager::shutdown_reason() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    SpinLockGuard lock(mutex_);
     return shutdown_reason_;
 }
 
 int ShutdownManager::progress_percent() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    SpinLockGuard lock(mutex_);
 
     if (components_.empty()) {
         return is_shutting_down() ? 100 : 0;
@@ -231,12 +233,12 @@ int ShutdownManager::progress_percent() const {
 // 콜백 설정
 // =============================================================================
 void ShutdownManager::set_progress_callback(ProgressCallback callback) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    SpinLockGuard lock(mutex_);
     progress_callback_ = std::move(callback);
 }
 
 void ShutdownManager::set_event_bus(std::shared_ptr<EventBus> bus) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    SpinLockGuard lock(mutex_);
     event_bus_ = bus;
 }
 
@@ -251,7 +253,7 @@ void ShutdownManager::do_shutdown() {
     // 컴포넌트 목록 복사 및 정렬
     std::vector<ShutdownComponent> components_copy;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        SpinLockGuard lock(mutex_);
         components_copy = components_;
     }
 
@@ -282,7 +284,7 @@ void ShutdownManager::do_shutdown() {
 
         // 원본 컴포넌트 상태 업데이트
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            SpinLockGuard lock(mutex_);
             auto it = std::find_if(components_.begin(), components_.end(),
                 [&component](const ShutdownComponent& c) {
                     return c.name == component.name;
@@ -292,9 +294,14 @@ void ShutdownManager::do_shutdown() {
                 it->elapsed = component.elapsed;
             }
 
-            // 진행 콜백 호출
+            // 진행 콜백 호출 (inline progress calc to avoid recursive lock)
             if (progress_callback_) {
-                int progress = progress_percent();
+                size_t done = 0;
+                for (const auto& c : components_) {
+                    if (c.completed) ++done;
+                }
+                int progress = components_.empty() ? 100
+                    : static_cast<int>(done * 100 / components_.size());
                 progress_callback_(component.name, progress);
             }
         }
@@ -327,7 +334,7 @@ void ShutdownManager::do_shutdown() {
     }
 
     phase_.store(result_.phase, std::memory_order_release);
-    shutdown_cv_.notify_all();
+    shutdown_wakeup_.store(true, std::memory_order_release);
 }
 
 bool ShutdownManager::stop_component(ShutdownComponent& component) {

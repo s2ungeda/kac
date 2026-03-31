@@ -10,11 +10,10 @@
  */
 
 #include "arbitrage/common/types.hpp"
+#include "arbitrage/common/spin_wait.hpp"
 
 #include <atomic>
-#include <condition_variable>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <thread>
 
@@ -43,8 +42,8 @@ public:
         std::atomic<double>* price_binance;
         std::atomic<double>* price_mexc;
         std::atomic<double>* current_fx_rate;
-        std::mutex* cv_mutex;
-        std::condition_variable* cv_shutdown;
+        std::atomic<bool>* wakeup;
+        std::atomic<bool>* running_for_wakeup;
         std::atomic<bool>* running;
     };
 
@@ -72,8 +71,8 @@ public:
         PremiumCalculator* calculator;
         std::atomic<double>* current_fx_rate;
         std::shared_ptr<SimpleLogger> logger;
-        std::mutex* cv_mutex;
-        std::condition_variable* cv_shutdown;
+        std::atomic<bool>* wakeup;
+        std::atomic<bool>* running_for_wakeup;
         std::atomic<bool>* running;
     };
 

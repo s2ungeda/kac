@@ -21,10 +21,11 @@
 #include <cmath>
 #include <deque>
 #include <functional>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
+
+#include "arbitrage/common/spin_wait.hpp"
 
 namespace arbitrage {
 
@@ -528,12 +529,12 @@ private:
     StatsReporter reporter_;
 
     // 거래 기록
-    mutable std::mutex trades_mutex_;
+    mutable RWSpinLock trades_mutex_;
     std::deque<ExtendedTradeRecord> trades_;
     size_t total_trades_ever_{0};  // 파일에 저장된 것 포함
 
     // 전체 통계 (캐시)
-    mutable std::mutex stats_mutex_;
+    mutable RWSpinLock stats_mutex_;
     TradingStats all_time_stats_;
 
     // 자산 추적
@@ -552,14 +553,13 @@ private:
     int last_processed_day_{0};
 
     // 콜백
-    std::mutex callback_mutex_;
+    SpinLock callback_mutex_;
     StatsCallback daily_close_callback_;
 
     // 자동 저장
     std::atomic<bool> running_{false};
     std::thread auto_save_thread_;
-    std::condition_variable cv_;
-    std::mutex cv_mutex_;
+    std::atomic<bool> wakeup_{false};
 };
 
 // =============================================================================

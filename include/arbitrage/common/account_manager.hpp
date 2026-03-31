@@ -12,12 +12,12 @@
 
 #include "arbitrage/common/types.hpp"
 #include "arbitrage/common/error.hpp"
+#include "arbitrage/common/spin_wait.hpp"
 
 #include <string>
 #include <vector>
 #include <map>
 #include <optional>
-#include <shared_mutex>
 #include <chrono>
 #include <functional>
 #include <atomic>
@@ -304,7 +304,7 @@ private:
     void notify_change(const Account& account, const std::string& event);
 
     // 멤버 변수
-    mutable std::shared_mutex mutex_;
+    mutable RWSpinLock mutex_;
     std::map<std::string, Account> accounts_;  // account_id -> Account
 
     AccountSelectionStrategy strategy_{AccountSelectionStrategy::RoundRobin};

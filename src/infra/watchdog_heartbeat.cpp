@@ -19,7 +19,7 @@ HeartbeatMonitor::HeartbeatMonitor() {
 void HeartbeatMonitor::handle_heartbeat(const Heartbeat& hb,
                                          std::weak_ptr<EventBus> event_bus) {
     {
-        std::lock_guard<std::mutex> lock(heartbeat_mutex_);
+        WriteGuard lock(heartbeat_mutex_);
         last_heartbeat_ = hb;
         last_heartbeat_time_ = std::chrono::steady_clock::now();
     }
@@ -29,7 +29,7 @@ void HeartbeatMonitor::handle_heartbeat(const Heartbeat& hb,
     // 콜백 호출
     std::vector<HeartbeatCallback> callbacks;
     {
-        std::lock_guard<std::mutex> lock(callbacks_mutex_);
+        SpinLockGuard lock(callbacks_mutex_);
         callbacks = heartbeat_callbacks_;
     }
 
@@ -53,12 +53,12 @@ void HeartbeatMonitor::handle_heartbeat(const Heartbeat& hb,
 }
 
 Heartbeat HeartbeatMonitor::last_heartbeat() const {
-    std::lock_guard<std::mutex> lock(heartbeat_mutex_);
+    ReadGuard lock(heartbeat_mutex_);
     return last_heartbeat_;
 }
 
 int64_t HeartbeatMonitor::ms_since_last_heartbeat() const {
-    std::lock_guard<std::mutex> lock(heartbeat_mutex_);
+    ReadGuard lock(heartbeat_mutex_);
     auto now = std::chrono::steady_clock::now();
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         now - last_heartbeat_time_).count();
@@ -84,7 +84,7 @@ int HeartbeatMonitor::check_timeout(int timeout_ms) {
 // =============================================================================
 
 void HeartbeatMonitor::on_heartbeat(HeartbeatCallback callback) {
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    SpinLockGuard lock(callbacks_mutex_);
     heartbeat_callbacks_.push_back(std::move(callback));
 }
 
@@ -93,7 +93,7 @@ void HeartbeatMonitor::on_heartbeat(HeartbeatCallback callback) {
 // =============================================================================
 
 std::chrono::steady_clock::time_point HeartbeatMonitor::last_heartbeat_steady_time() const {
-    std::lock_guard<std::mutex> lock(heartbeat_mutex_);
+    ReadGuard lock(heartbeat_mutex_);
     return last_heartbeat_time_;
 }
 

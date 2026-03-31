@@ -28,7 +28,7 @@ int TcpClientManager::add_client(int fd, const std::string& addr, int port) {
     info.last_activity = info.connected_at;
 
     {
-        std::lock_guard<std::mutex> lock(clients_mutex_);
+        WriteGuard lock(clients_mutex_);
         clients_[client_id] = info;
         fd_to_client_[fd] = client_id;
         recv_buffers_[client_id] = {};
@@ -43,7 +43,7 @@ void TcpClientManager::remove_client(int client_id, int epoll_fd) {
     bool found = false;
 
     {
-        std::lock_guard<std::mutex> lock(clients_mutex_);
+        WriteGuard lock(clients_mutex_);
 
         auto it = clients_.find(client_id);
         if (it == clients_.end()) {
@@ -76,7 +76,7 @@ void TcpClientManager::remove_client(int client_id, int epoll_fd) {
         // Fire disconnected callback
         ClientCallback cb;
         {
-            std::lock_guard<std::mutex> lock(callbacks_mutex_);
+            SpinLockGuard lock(callbacks_mutex_);
             cb = on_disconnected_callback_;
         }
 
@@ -91,7 +91,7 @@ void TcpClientManager::remove_client(int client_id, int epoll_fd) {
 }
 
 void TcpClientManager::remove_all_clients() {
-    std::lock_guard<std::mutex> lock(clients_mutex_);
+    WriteGuard lock(clients_mutex_);
     for (auto& [id, info] : clients_) {
 #ifdef __linux__
         if (info.fd >= 0) {
@@ -109,12 +109,12 @@ void TcpClientManager::remove_all_clients() {
 // =============================================================================
 
 size_t TcpClientManager::client_count() const {
-    std::lock_guard<std::mutex> lock(clients_mutex_);
+    ReadGuard lock(clients_mutex_);
     return clients_.size();
 }
 
 size_t TcpClientManager::authenticated_client_count() const {
-    std::lock_guard<std::mutex> lock(clients_mutex_);
+    ReadGuard lock(clients_mutex_);
     size_t count = 0;
     for (const auto& [id, info] : clients_) {
         if (info.state == ClientState::Authenticated) {
@@ -125,7 +125,7 @@ size_t TcpClientManager::authenticated_client_count() const {
 }
 
 std::vector<ClientInfo> TcpClientManager::get_clients() const {
-    std::lock_guard<std::mutex> lock(clients_mutex_);
+    ReadGuard lock(clients_mutex_);
     std::vector<ClientInfo> result;
     result.reserve(clients_.size());
     for (const auto& [id, info] : clients_) {
@@ -135,7 +135,7 @@ std::vector<ClientInfo> TcpClientManager::get_clients() const {
 }
 
 std::optional<ClientInfo> TcpClientManager::get_client(int client_id) const {
-    std::lock_guard<std::mutex> lock(clients_mutex_);
+    ReadGuard lock(clients_mutex_);
     auto it = clients_.find(client_id);
     if (it != clients_.end()) {
         return it->second;
@@ -144,7 +144,7 @@ std::optional<ClientInfo> TcpClientManager::get_client(int client_id) const {
 }
 
 int TcpClientManager::fd_to_client_id(int fd) const {
-    std::lock_guard<std::mutex> lock(clients_mutex_);
+    ReadGuard lock(clients_mutex_);
     auto it = fd_to_client_.find(fd);
     if (it != fd_to_client_.end()) {
         return it->second;
@@ -158,7 +158,7 @@ int TcpClientManager::fd_to_client_id(int fd) const {
 
 bool TcpClientManager::send_message(int client_id, const Message& message) {
 #ifdef __linux__
-    std::lock_guard<std::mutex> lock(clients_mutex_);
+    WriteGuard lock(clients_mutex_);
 
     auto it = clients_.find(client_id);
     if (it == clients_.end() || it->second.fd < 0) {
@@ -196,7 +196,7 @@ void TcpClientManager::broadcast_if(const Message& message,
 #ifdef __linux__
     auto data = message.serialize();
 
-    std::lock_guard<std::mutex> lock(clients_mutex_);
+    WriteGuard lock(clients_mutex_);
 
     for (auto& [id, info] : clients_) {
         if (info.fd >= 0 && predicate(info)) {
@@ -220,7 +220,7 @@ void TcpClientManager::disconnect_client(int client_id, const std::string& reaso
 {
 #ifdef __linux__
     {
-        std::lock_guard<std::mutex> lock(clients_mutex_);
+        WriteGuard lock(clients_mutex_);
         auto it = clients_.find(client_id);
         if (it != clients_.end()) {
             // Send disconnect message before removal
@@ -253,23 +253,28 @@ bool TcpClientManager::handle_received_data(int client_id, const uint8_t* data,
 {
     // Append to receive buffer and update stats
     {
-        std::lock_guard<std::mutex> lock(clients_mutex_);
+        bool too_large = false;
+        {
+            WriteGuard lock(clients_mutex_);
 
-        auto it = clients_.find(client_id);
-        if (it == clients_.end()) {
-            return false;
+            auto it = clients_.find(client_id);
+            if (it == clients_.end()) {
+                return false;
+            }
+
+            it->second.last_activity = std::chrono::steady_clock::now();
+            it->second.bytes_received += static_cast<uint64_t>(len);
+            total_bytes_received_.fetch_add(static_cast<uint64_t>(len), std::memory_order_relaxed);
+
+            auto& recv_buf = recv_buffers_[client_id];
+            recv_buf.insert(recv_buf.end(), data, data + len);
+
+            // Max message size check
+            if (recv_buf.size() > max_message_size) {
+                too_large = true;
+            }
         }
-
-        it->second.last_activity = std::chrono::steady_clock::now();
-        it->second.bytes_received += static_cast<uint64_t>(len);
-        total_bytes_received_.fetch_add(static_cast<uint64_t>(len), std::memory_order_relaxed);
-
-        auto& recv_buf = recv_buffers_[client_id];
-        recv_buf.insert(recv_buf.end(), data, data + len);
-
-        // Max message size check
-        if (recv_buf.size() > max_message_size) {
-            lock.~lock_guard();
+        if (too_large) {
             disconnect_client(client_id, "Message too large", epoll_fd);
             return false;
         }
@@ -277,53 +282,68 @@ bool TcpClientManager::handle_received_data(int client_id, const uint8_t* data,
 
     // Parse complete messages
     while (true) {
-        std::lock_guard<std::mutex> lock(clients_mutex_);
-        auto buf_it = recv_buffers_.find(client_id);
-        if (buf_it == recv_buffers_.end()) {
+        Message msg;
+        bool need_disconnect = false;
+        bool need_more_data = false;
+        bool buffer_gone = false;
+
+        {
+            WriteGuard lock(clients_mutex_);
+            auto buf_it = recv_buffers_.find(client_id);
+            if (buf_it == recv_buffers_.end()) {
+                buffer_gone = true;
+            } else {
+                auto* recv_buf = &buf_it->second;
+
+                // Need at least a header
+                if (recv_buf->size() < sizeof(MessageHeader)) {
+                    need_more_data = true;
+                } else {
+                    // Parse header
+                    MessageHeader header;
+                    std::memcpy(&header, recv_buf->data(), sizeof(MessageHeader));
+
+                    if (!header.is_valid()) {
+                        need_disconnect = true;
+                    } else {
+                        // Check if full message is available
+                        size_t total_size = sizeof(MessageHeader) + header.payload_length;
+                        if (recv_buf->size() < total_size) {
+                            need_more_data = true;
+                        } else {
+                            // Extract message
+                            msg.header = header;
+                            msg.payload.assign(
+                                recv_buf->begin() + sizeof(MessageHeader),
+                                recv_buf->begin() + total_size
+                            );
+
+                            // Remove from buffer
+                            recv_buf->erase(recv_buf->begin(), recv_buf->begin() + total_size);
+
+                            auto client_it = clients_.find(client_id);
+                            if (client_it != clients_.end()) {
+                                client_it->second.messages_received++;
+                            }
+                            total_messages_received_.fetch_add(1, std::memory_order_relaxed);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (buffer_gone) {
             return false;
         }
-        auto* recv_buf = &buf_it->second;
-
-        // Need at least a header
-        if (recv_buf->size() < sizeof(MessageHeader)) {
+        if (need_more_data) {
             break;
         }
-
-        // Parse header
-        MessageHeader header;
-        std::memcpy(&header, recv_buf->data(), sizeof(MessageHeader));
-
-        if (!header.is_valid()) {
-            lock.~lock_guard();
+        if (need_disconnect) {
             disconnect_client(client_id, "Invalid message header", epoll_fd);
             return false;
         }
 
-        // Check if full message is available
-        size_t total_size = sizeof(MessageHeader) + header.payload_length;
-        if (recv_buf->size() < total_size) {
-            break;  // Need more data
-        }
-
-        // Extract message
-        Message msg;
-        msg.header = header;
-        msg.payload.assign(
-            recv_buf->begin() + sizeof(MessageHeader),
-            recv_buf->begin() + total_size
-        );
-
-        // Remove from buffer
-        recv_buf->erase(recv_buf->begin(), recv_buf->begin() + total_size);
-
-        auto client_it = clients_.find(client_id);
-        if (client_it != clients_.end()) {
-            client_it->second.messages_received++;
-        }
-        total_messages_received_.fetch_add(1, std::memory_order_relaxed);
-
-        // Release lock then process
-        lock.~lock_guard();
+        // Process message outside lock
         process_message(client_id, msg, require_auth, epoll_fd);
     }
 
@@ -350,7 +370,7 @@ void TcpClientManager::process_message(int client_id, const Message& message,
 
     // Auth check
     if (require_auth) {
-        std::lock_guard<std::mutex> lock(clients_mutex_);
+        ReadGuard lock(clients_mutex_);
         auto it = clients_.find(client_id);
         if (it == clients_.end() || it->second.state != ClientState::Authenticated) {
             Message error(MessageType::Error, "Authentication required");
@@ -362,7 +382,7 @@ void TcpClientManager::process_message(int client_id, const Message& message,
     // Fire message callback
     MessageCallback cb;
     {
-        std::lock_guard<std::mutex> lock(callbacks_mutex_);
+        SpinLockGuard lock(callbacks_mutex_);
         cb = on_message_callback_;
     }
 
@@ -393,7 +413,7 @@ void TcpClientManager::handle_auth(int client_id, const Message& message,
     // Fire auth callback
     AuthCallback cb;
     {
-        std::lock_guard<std::mutex> lock(callbacks_mutex_);
+        SpinLockGuard lock(callbacks_mutex_);
         cb = auth_callback_;
     }
 
@@ -410,7 +430,7 @@ void TcpClientManager::handle_auth(int client_id, const Message& message,
     // Send result
     if (auth_success) {
         {
-            std::lock_guard<std::mutex> lock(clients_mutex_);
+            WriteGuard lock(clients_mutex_);
             auto it = clients_.find(client_id);
             if (it != clients_.end()) {
                 it->second.state = ClientState::Authenticated;
@@ -436,22 +456,22 @@ void TcpClientManager::handle_auth(int client_id, const Message& message,
 // =============================================================================
 
 void TcpClientManager::on_message(MessageCallback callback) {
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    SpinLockGuard lock(callbacks_mutex_);
     on_message_callback_ = std::move(callback);
 }
 
 void TcpClientManager::on_client_connected(ClientCallback callback) {
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    SpinLockGuard lock(callbacks_mutex_);
     on_connected_callback_ = std::move(callback);
 }
 
 void TcpClientManager::on_client_disconnected(ClientCallback callback) {
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    SpinLockGuard lock(callbacks_mutex_);
     on_disconnected_callback_ = std::move(callback);
 }
 
 void TcpClientManager::set_auth_callback(AuthCallback callback) {
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    SpinLockGuard lock(callbacks_mutex_);
     auth_callback_ = std::move(callback);
 }
 
@@ -459,11 +479,11 @@ void TcpClientManager::fire_connected_callback(int client_id) {
     ClientCallback cb;
     ClientInfo info;
     {
-        std::lock_guard<std::mutex> lock(callbacks_mutex_);
+        SpinLockGuard lock(callbacks_mutex_);
         cb = on_connected_callback_;
     }
     {
-        std::lock_guard<std::mutex> lock(clients_mutex_);
+        ReadGuard lock(clients_mutex_);
         auto it = clients_.find(client_id);
         if (it != clients_.end()) {
             info = it->second;
@@ -489,7 +509,7 @@ std::vector<int> TcpClientManager::get_timed_out_clients(
     auto now = std::chrono::steady_clock::now();
     std::vector<int> timeout_clients;
 
-    std::lock_guard<std::mutex> lock(clients_mutex_);
+    ReadGuard lock(clients_mutex_);
     for (const auto& [id, info] : clients_) {
         auto idle_time = std::chrono::duration_cast<std::chrono::seconds>(
             now - info.last_activity);
@@ -517,7 +537,7 @@ void TcpClientManager::send_pings(std::chrono::seconds threshold) {
 #ifdef __linux__
     auto now = std::chrono::steady_clock::now();
 
-    std::lock_guard<std::mutex> lock(clients_mutex_);
+    ReadGuard lock(clients_mutex_);
     for (const auto& [id, info] : clients_) {
         auto idle_time = std::chrono::duration_cast<std::chrono::seconds>(
             now - info.last_activity);

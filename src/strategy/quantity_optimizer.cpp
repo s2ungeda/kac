@@ -33,7 +33,7 @@ double QuantityOptimizer::calculate_optimal_qty(
     const PremiumInfo& opportunity,
     const RiskAssessment* risk,
     const std::array<BalanceInfo, 4>& balances,
-    std::shared_mutex& balance_mutex
+    RWSpinLock& balance_mutex
 ) {
     double qty = config_->base_order_qty;
 
@@ -65,9 +65,9 @@ double QuantityOptimizer::calculate_max_qty_by_balance(
     Exchange sell_ex,
     double buy_price,
     const std::array<BalanceInfo, 4>& balances,
-    std::shared_mutex& balance_mutex
+    RWSpinLock& balance_mutex
 ) {
-    std::shared_lock lock(balance_mutex);
+    ReadGuard lock(balance_mutex);
 
     const auto& buy_balance = balances[static_cast<int>(buy_ex)];
     const auto& sell_balance = balances[static_cast<int>(sell_ex)];

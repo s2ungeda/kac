@@ -15,12 +15,13 @@
 #include "arbitrage/strategy/slippage_model.hpp"
 #include "arbitrage/common/fee_calculator.hpp"
 
+#include "arbitrage/common/spin_wait.hpp"
+
 #include <deque>
 #include <vector>
 #include <string>
 #include <chrono>
 #include <array>
-#include <shared_mutex>
 #include <atomic>
 #include <functional>
 #include <cmath>
@@ -420,7 +421,7 @@ private:
     SlippageModel* slippage_model_{nullptr};
 
     // 동기화
-    mutable std::shared_mutex mutex_;
+    mutable RWSpinLock mutex_;
 
     // 통계
     mutable Stats stats_;

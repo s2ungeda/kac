@@ -10,12 +10,12 @@
 #include <atomic>
 #include <array>
 #include <chrono>
-#include <condition_variable>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <thread>
+
+#include "arbitrage/common/spin_wait.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
@@ -108,8 +108,7 @@ private:
 
     // --- Thread control ---
     std::atomic<bool> running_{true};
-    std::mutex cv_mutex_;
-    std::condition_variable cv_shutdown_;
+    std::atomic<bool> wakeup_{false};
 
     // --- Infrastructure ---
     std::shared_ptr<EventBus> event_bus_;

@@ -13,13 +13,14 @@
 #include "arbitrage/common/error.hpp"
 #include "arbitrage/common/http_client.hpp"
 
+#include "arbitrage/common/spin_wait.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <deque>
 #include <functional>
 #include <future>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -331,15 +332,14 @@ private:
     // 워커 스레드
     std::atomic<bool> running_{false};
     std::thread worker_;
-    std::condition_variable cv_;
-    std::mutex cv_mutex_;
+    std::atomic<bool> wakeup_{false};
 
     // 알림 큐
-    mutable std::mutex queue_mutex_;
+    mutable SpinLock queue_mutex_;
     std::deque<std::pair<Alert, std::promise<Result<void>>>> queue_;
 
     // Rate limiting
-    mutable std::mutex rate_limit_mutex_;
+    mutable SpinLock rate_limit_mutex_;
     std::deque<std::chrono::steady_clock::time_point> recent_alerts_;
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> last_alert_time_;
 

@@ -15,7 +15,7 @@
 #include <string>
 #include <map>
 #include <optional>
-#include <shared_mutex>
+#include "arbitrage/common/spin_wait.hpp"
 #include <vector>
 #include <chrono>
 
@@ -242,7 +242,7 @@ private:
     // 키 생성: "exchange:unified"
     static std::string make_key(Exchange exchange, const std::string& unified);
 
-    mutable std::shared_mutex mutex_;
+    mutable RWSpinLock mutex_;
 
     // unified 심볼 기준 저장
     std::map<std::string, SymbolInfo> symbols_;  // "exchange:unified" -> SymbolInfo

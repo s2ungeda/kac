@@ -13,11 +13,11 @@
 
 #include "arbitrage/common/types.hpp"
 #include "arbitrage/common/fee_constants.hpp"
+#include "arbitrage/common/spin_wait.hpp"
 
 #include <map>
 #include <string>
 #include <vector>
-#include <shared_mutex>
 #include <functional>
 
 namespace arbitrage {
@@ -334,7 +334,7 @@ private:
     std::map<Exchange, std::vector<VipFeeLevel>> vip_tables_;
 
     // 스레드 안전
-    mutable std::shared_mutex mutex_;
+    mutable RWSpinLock mutex_;
 };
 
 // =============================================================================

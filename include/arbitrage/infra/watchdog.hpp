@@ -24,14 +24,13 @@
 #include "arbitrage/infra/watchdog_heartbeat.hpp"
 #include "arbitrage/infra/watchdog_state.hpp"
 #include "arbitrage/infra/watchdog_client.hpp"
+#include "arbitrage/common/spin_wait.hpp"
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <deque>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -433,11 +432,10 @@ private:
     // 스레드
     std::thread monitor_thread_;
     std::thread ipc_thread_;
-    std::condition_variable cv_;
-    std::mutex cv_mutex_;
+    std::atomic<bool> wakeup_{false};
 
     // 재시작 추적
-    mutable std::mutex restart_mutex_;
+    mutable SpinLock restart_mutex_;
     std::chrono::steady_clock::time_point window_start_;
     std::deque<RestartEvent> restart_history_;
 
@@ -445,7 +443,7 @@ private:
     std::chrono::system_clock::time_point process_start_time_;
 
     // 콜백
-    std::mutex callbacks_mutex_;
+    SpinLock callbacks_mutex_;
     std::vector<RestartCallback> restart_callbacks_;
     std::vector<AlertCallback> alert_callbacks_;
     std::weak_ptr<EventBus> event_bus_;

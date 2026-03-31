@@ -283,6 +283,27 @@ private:
     std::atomic<int32_t> state_{0};
 };
 
+/**
+ * RWSpinLock RAII Guards
+ */
+class ReadGuard {
+    RWSpinLock& lock_;
+public:
+    explicit ReadGuard(RWSpinLock& l) noexcept : lock_(l) { lock_.lock_shared(); }
+    ~ReadGuard() noexcept { lock_.unlock_shared(); }
+    ReadGuard(const ReadGuard&) = delete;
+    ReadGuard& operator=(const ReadGuard&) = delete;
+};
+
+class WriteGuard {
+    RWSpinLock& lock_;
+public:
+    explicit WriteGuard(RWSpinLock& l) noexcept : lock_(l) { lock_.lock(); }
+    ~WriteGuard() noexcept { lock_.unlock(); }
+    WriteGuard(const WriteGuard&) = delete;
+    WriteGuard& operator=(const WriteGuard&) = delete;
+};
+
 
 /**
  * Backoff 전략

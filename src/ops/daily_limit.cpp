@@ -12,10 +12,13 @@ namespace arbitrage {
 // 싱글톤
 // =============================================================================
 
+namespace { DailyLossLimiter* g_set_daily_limiter_override = nullptr; }
 DailyLossLimiter& DailyLossLimiter::instance() {
+    if (g_set_daily_limiter_override) return *g_set_daily_limiter_override;
     static DailyLossLimiter instance;
     return instance;
 }
+void set_daily_limiter(DailyLossLimiter* p) { g_set_daily_limiter_override = p; }
 
 // =============================================================================
 // 생성자/소멸자
@@ -61,7 +64,7 @@ void DailyLossLimiter::stop() {
         return;
     }
 
-    cv_.notify_all();
+    wakeup_.store(true, std::memory_order_release);
 
     if (reset_thread_.joinable()) {
         reset_thread_.join();
@@ -78,7 +81,7 @@ bool DailyLossLimiter::record_trade(double pnl_krw, double volume_krw) {
     }
 
     {
-        std::lock_guard<std::mutex> lock(stats_mutex_);
+        WriteGuard lock(stats_mutex_);
         update_stats(pnl_krw, volume_krw);
 
         // 거래 기록 추가
@@ -101,7 +104,7 @@ bool DailyLossLimiter::record_trade(const TradeRecord& record) {
     }
 
     {
-        std::lock_guard<std::mutex> lock(stats_mutex_);
+        WriteGuard lock(stats_mutex_);
         update_stats(record.pnl_krw, record.volume_krw);
 
         trade_history_.push_back(record);
@@ -116,7 +119,7 @@ bool DailyLossLimiter::record_trade(const TradeRecord& record) {
 }
 
 void DailyLossLimiter::update_unrealized_pnl(double unrealized_krw) {
-    std::lock_guard<std::mutex> lock(stats_mutex_);
+    WriteGuard lock(stats_mutex_);
     stats_.unrealized_pnl = unrealized_krw;
     stats_.total_pnl = stats_.realized_pnl + unrealized_krw;
 
@@ -135,12 +138,12 @@ void DailyLossLimiter::update_unrealized_pnl(double unrealized_krw) {
 // =============================================================================
 
 DailyStats DailyLossLimiter::get_stats() const {
-    std::lock_guard<std::mutex> lock(stats_mutex_);
+    ReadGuard lock(stats_mutex_);
     return stats_;
 }
 
 double DailyLossLimiter::remaining_limit() const {
-    std::lock_guard<std::mutex> lock(stats_mutex_);
+    ReadGuard lock(stats_mutex_);
 
     double current_loss = -stats_.realized_pnl;
     if (config_.track_unrealized) {
@@ -156,7 +159,7 @@ double DailyLossLimiter::remaining_limit() const {
 }
 
 double DailyLossLimiter::usage_percent() const {
-    std::lock_guard<std::mutex> lock(stats_mutex_);
+    ReadGuard lock(stats_mutex_);
 
     double current_loss = -stats_.realized_pnl;
     if (config_.track_unrealized) {
@@ -192,7 +195,7 @@ bool DailyLossLimiter::is_critical() const {
 
 void DailyLossLimiter::reset() {
     {
-        std::lock_guard<std::mutex> lock(stats_mutex_);
+        WriteGuard lock(stats_mutex_);
         stats_ = DailyStats();
         stats_.reset_time = std::chrono::system_clock::now();
         trade_history_.clear();
@@ -212,37 +215,37 @@ std::chrono::system_clock::time_point DailyLossLimiter::next_reset_time() const 
 // =============================================================================
 
 void DailyLossLimiter::set_config(const DailyLimitConfig& config) {
-    std::lock_guard<std::mutex> lock(stats_mutex_);
+    WriteGuard lock(stats_mutex_);
     config_ = config;
 }
 
 DailyLimitConfig DailyLossLimiter::config() const {
-    std::lock_guard<std::mutex> lock(stats_mutex_);
+    ReadGuard lock(stats_mutex_);
     return config_;
 }
 
 void DailyLossLimiter::set_limit(double limit_krw) {
-    std::lock_guard<std::mutex> lock(stats_mutex_);
+    WriteGuard lock(stats_mutex_);
     config_.daily_loss_limit_krw = limit_krw;
 }
 
 void DailyLossLimiter::set_kill_switch(KillSwitchCallback callback) {
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    SpinLockGuard lock(callbacks_mutex_);
     kill_switch_callback_ = std::move(callback);
 }
 
 void DailyLossLimiter::on_warning(WarningCallback callback) {
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    SpinLockGuard lock(callbacks_mutex_);
     warning_callback_ = std::move(callback);
 }
 
 void DailyLossLimiter::on_critical(WarningCallback callback) {
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    SpinLockGuard lock(callbacks_mutex_);
     critical_callback_ = std::move(callback);
 }
 
 void DailyLossLimiter::set_event_bus(std::shared_ptr<EventBus> bus) {
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    SpinLockGuard lock(callbacks_mutex_);
     event_bus_ = bus;
 }
 
@@ -251,12 +254,12 @@ void DailyLossLimiter::set_event_bus(std::shared_ptr<EventBus> bus) {
 // =============================================================================
 
 std::vector<TradeRecord> DailyLossLimiter::get_trade_history() const {
-    std::lock_guard<std::mutex> lock(stats_mutex_);
+    ReadGuard lock(stats_mutex_);
     return trade_history_;
 }
 
 size_t DailyLossLimiter::trade_history_size() const {
-    std::lock_guard<std::mutex> lock(stats_mutex_);
+    ReadGuard lock(stats_mutex_);
     return trade_history_.size();
 }
 
@@ -269,7 +272,7 @@ void DailyLossLimiter::check_and_trigger() {
     double limit = 0.0;
 
     {
-        std::lock_guard<std::mutex> lock(stats_mutex_);
+        ReadGuard lock(stats_mutex_);
         current_loss = -stats_.realized_pnl;
         if (config_.track_unrealized) {
             current_loss = -stats_.total_pnl;
@@ -289,7 +292,7 @@ void DailyLossLimiter::check_and_trigger() {
     {
         WarningCallback cb;
         {
-            std::lock_guard<std::mutex> lock(callbacks_mutex_);
+            SpinLockGuard lock(callbacks_mutex_);
             cb = warning_callback_;
         }
         if (cb) {
@@ -307,7 +310,7 @@ void DailyLossLimiter::check_and_trigger() {
     {
         WarningCallback cb;
         {
-            std::lock_guard<std::mutex> lock(callbacks_mutex_);
+            SpinLockGuard lock(callbacks_mutex_);
             cb = critical_callback_;
         }
         if (cb) {
@@ -327,7 +330,7 @@ void DailyLossLimiter::check_and_trigger() {
         if (config_.enable_kill_switch) {
             KillSwitchCallback kill_cb;
             {
-                std::lock_guard<std::mutex> lock(callbacks_mutex_);
+                SpinLockGuard lock(callbacks_mutex_);
                 kill_cb = kill_switch_callback_;
             }
             if (kill_cb) {
@@ -365,15 +368,19 @@ void DailyLossLimiter::reset_timer_thread() {
             next_reset = next_reset + std::chrono::hours(24);
         }
 
-        auto wait_time = next_reset - now;
+        auto wait_time = std::chrono::duration_cast<std::chrono::milliseconds>(next_reset - now);
 
-        {
-            std::unique_lock<std::mutex> lock(cv_mutex_);
-            if (cv_.wait_for(lock, wait_time, [this]() {
-                return !running_.load(std::memory_order_acquire);
-            })) {
-                break;  // 종료 요청
-            }
+        wakeup_.store(false, std::memory_order_release);
+        bool woken = SpinWait::until_for(
+            [this]() {
+                return wakeup_.load(std::memory_order_acquire) ||
+                       !running_.load(std::memory_order_acquire);
+            },
+            wait_time
+        );
+
+        if (woken && !running_.load(std::memory_order_acquire)) {
+            break;  // 종료 요청
         }
 
         if (running_.load(std::memory_order_acquire)) {

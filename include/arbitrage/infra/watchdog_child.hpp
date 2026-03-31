@@ -8,12 +8,12 @@
  * - ChildProcessManager class
  */
 
+#include "arbitrage/common/spin_wait.hpp"
+
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <functional>
 #include <map>
-#include <mutex>
 #include <string>
 #include <vector>
 
@@ -120,9 +120,10 @@ public:
     /**
      * 자식 프로세스 상태 체크 (monitor_loop에서 호출)
      * @param system_running 시스템 실행 중 여부 (check 중 종료 트리거에 사용)
+     * @param wakeup 종료 시그널용 atomic flag
      */
     void check_children(std::atomic<bool>& system_running,
-                        std::condition_variable& cv);
+                        std::atomic<bool>& wakeup);
 
     // =========================================================================
     // 조회
@@ -149,7 +150,7 @@ public:
 private:
     void send_alert(const std::string& level, const std::string& message);
 
-    mutable std::mutex children_mutex_;
+    mutable SpinLock children_mutex_;
     std::map<std::string, ChildProcessInfo> children_;
     std::string working_directory_;
 

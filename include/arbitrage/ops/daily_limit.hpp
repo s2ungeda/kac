@@ -11,13 +11,12 @@
  */
 
 #include "arbitrage/common/error.hpp"
+#include "arbitrage/common/spin_wait.hpp"
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -304,7 +303,7 @@ private:
     DailyLimitConfig config_;
 
     // 통계
-    mutable std::mutex stats_mutex_;
+    mutable RWSpinLock stats_mutex_;
     DailyStats stats_;
     std::vector<TradeRecord> trade_history_;
 
@@ -314,7 +313,7 @@ private:
     std::atomic<bool> critical_triggered_{false};
 
     // 콜백
-    std::mutex callbacks_mutex_;
+    SpinLock callbacks_mutex_;
     KillSwitchCallback kill_switch_callback_;
     WarningCallback warning_callback_;
     WarningCallback critical_callback_;
@@ -322,8 +321,7 @@ private:
     // 리셋 타이머
     std::atomic<bool> running_{false};
     std::thread reset_thread_;
-    std::condition_variable cv_;
-    std::mutex cv_mutex_;
+    std::atomic<bool> wakeup_{false};
 
     // EventBus
     std::weak_ptr<EventBus> event_bus_;

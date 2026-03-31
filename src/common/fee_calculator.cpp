@@ -21,10 +21,13 @@ namespace arbitrage {
 // =============================================================================
 // 글로벌 인스턴스
 // =============================================================================
+namespace { FeeCalculator* g_set_fee_calculator_override = nullptr; }
 FeeCalculator& fee_calculator() {
+    if (g_set_fee_calculator_override) return *g_set_fee_calculator_override;
     static FeeCalculator instance;
     return instance;
 }
+void set_fee_calculator(FeeCalculator* p) { g_set_fee_calculator_override = p; }
 
 // =============================================================================
 // 생성자
@@ -131,7 +134,7 @@ bool FeeCalculator::load_config(const std::string& config_path) {
             return false;
         }
 
-        std::unique_lock lock(mutex_);
+        WriteGuard lock(mutex_);
 
         for (const auto& pair : root["exchanges"]) {
             std::string name = pair.first.as<std::string>();
@@ -209,12 +212,12 @@ bool FeeCalculator::load_config(const std::string& config_path) {
 // 거래소 설정
 // =============================================================================
 void FeeCalculator::set_exchange_config(const ExchangeFeeConfig& config) {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
     configs_[config.exchange] = config;
 }
 
 const ExchangeFeeConfig& FeeCalculator::get_exchange_config(Exchange ex) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
     auto it = configs_.find(ex);
     if (it != configs_.end()) {
         return it->second;
@@ -228,7 +231,7 @@ const ExchangeFeeConfig& FeeCalculator::get_exchange_config(Exchange ex) const {
 // 수수료율 조회
 // =============================================================================
 double FeeCalculator::get_fee_rate(Exchange ex, OrderRole role) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
     auto it = configs_.find(ex);
     if (it != configs_.end()) {
         return it->second.get_fee_rate(role);
@@ -244,7 +247,7 @@ double FeeCalculator::get_fee_rate_pct(Exchange ex, OrderRole role) const {
 }
 
 double FeeCalculator::get_withdraw_fee(Exchange ex, const std::string& coin) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
     auto it = configs_.find(ex);
     if (it != configs_.end()) {
         auto fee_it = it->second.withdraw_fees.find(coin);
@@ -260,7 +263,7 @@ double FeeCalculator::get_withdraw_fee(Exchange ex, const std::string& coin) con
 }
 
 double FeeCalculator::get_min_withdraw(Exchange ex, const std::string& coin) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
     auto it = configs_.find(ex);
     if (it != configs_.end()) {
         auto min_it = it->second.min_withdraw.find(coin);
@@ -307,7 +310,7 @@ TradeCost FeeCalculator::calculate_trade_cost(
 
     // 토큰 지불 여부 확인
     {
-        std::shared_lock lock(mutex_);
+        ReadGuard lock(mutex_);
         auto it = configs_.find(ex);
         if (it != configs_.end()) {
             cost.use_token_fee = it->second.use_token_for_fee;
@@ -448,7 +451,7 @@ double FeeCalculator::calculate_breakeven_premium(
 // 설정 변경
 // =============================================================================
 void FeeCalculator::set_vip_level(Exchange ex, int level) {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
 
     auto it = configs_.find(ex);
     if (it == configs_.end()) return;
@@ -469,7 +472,7 @@ void FeeCalculator::set_vip_level(Exchange ex, int level) {
 }
 
 void FeeCalculator::set_token_discount(Exchange ex, bool enabled) {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
     auto it = configs_.find(ex);
     if (it != configs_.end()) {
         it->second.use_token_for_fee = enabled;
@@ -477,7 +480,7 @@ void FeeCalculator::set_token_discount(Exchange ex, bool enabled) {
 }
 
 void FeeCalculator::update_withdraw_fee(Exchange ex, const std::string& coin, double fee) {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
     auto it = configs_.find(ex);
     if (it != configs_.end()) {
         it->second.withdraw_fees[coin] = fee;
@@ -504,7 +507,7 @@ void FeeCalculator::apply_vip_fees(ExchangeFeeConfig& config) const {
 // 요약 출력
 // =============================================================================
 void FeeCalculator::print_summary() const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
 
     std::cout << "\n========== Fee Calculator Summary ==========\n";
 
@@ -538,7 +541,7 @@ void FeeCalculator::print_summary() const {
 // 유효성 검사
 // =============================================================================
 bool FeeCalculator::validate() const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
     auto logger = Logger::default_logger();
 
     for (int i = 0; i < static_cast<int>(Exchange::Count); ++i) {

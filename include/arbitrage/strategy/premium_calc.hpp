@@ -3,7 +3,7 @@
 #include "arbitrage/common/types.hpp"
 #include "arbitrage/common/logger.hpp"
 #include <array>
-#include <shared_mutex>
+#include "arbitrage/common/spin_wait.hpp"
 #include <functional>
 #include <atomic>
 #include <optional>
@@ -70,7 +70,7 @@ private:
     double calc_premium(double buy_krw, double sell_krw) const;
     
 private:
-    mutable std::shared_mutex mutex_;
+    mutable RWSpinLock mutex_;
     
     // 거래소별 가격 (원시 값)
     std::array<std::atomic<double>, 4> prices_{};

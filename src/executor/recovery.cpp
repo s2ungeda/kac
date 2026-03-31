@@ -232,10 +232,10 @@ RecoveryQueue::~RecoveryQueue() {
 
 void RecoveryQueue::enqueue(const RecoveryPlan& plan) {
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        SpinLockGuard lock(mutex_);
         queue_.push(plan);
     }
-    cv_.notify_one();
+    wakeup_.store(true, std::memory_order_release);
 }
 
 void RecoveryQueue::start() {
@@ -253,7 +253,7 @@ void RecoveryQueue::stop() {
         return;  // Already stopped
     }
 
-    cv_.notify_all();
+    wakeup_.store(true, std::memory_order_release);
 
     if (worker_.joinable()) {
         worker_.join();
@@ -261,38 +261,54 @@ void RecoveryQueue::stop() {
 }
 
 size_t RecoveryQueue::pending_count() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    SpinLockGuard lock(mutex_);
     return queue_.size();
 }
 
 void RecoveryQueue::worker_loop() {
     while (running_) {
         RecoveryPlan plan;
+        bool has_plan = false;
 
-        {
-            std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [this]() {
-                return !running_ || !queue_.empty();
-            });
+        // SpinWait instead of cv.wait
+        SpinWait::until_for(
+            [this]() {
+                return wakeup_.load(std::memory_order_acquire) ||
+                       !running_.load(std::memory_order_acquire);
+            },
+            std::chrono::milliseconds(100)
+        );
+        wakeup_.store(false, std::memory_order_release);
 
-            if (!running_ && queue_.empty()) {
-                break;
+        if (!running_.load(std::memory_order_acquire)) {
+            // Drain remaining items
+            SpinLockGuard lock(mutex_);
+            while (!queue_.empty()) {
+                auto remaining = std::move(queue_.front());
+                queue_.pop();
+                auto result = manager_->execute_recovery(remaining);
+                if (callback_) callback_(result);
             }
-
-            if (queue_.empty()) {
-                continue;
-            }
-
-            plan = std::move(queue_.front());
-            queue_.pop();
+            break;
         }
 
-        // 복구 실행
-        auto result = manager_->execute_recovery(plan);
+        {
+            SpinLockGuard lock(mutex_);
+            if (!queue_.empty()) {
+                plan = std::move(queue_.front());
+                queue_.pop();
+                has_plan = true;
+            }
+        }
 
-        // 콜백 호출
-        if (callback_) {
-            callback_(result);
+        if (has_plan) {
+            // 복구 실행
+            auto result = manager_->execute_recovery(plan);
+
+            // 콜백 호출
+            if (callback_) {
+                callback_(result);
+            }
         }
     }
 }

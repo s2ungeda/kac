@@ -12,10 +12,12 @@
 #include <functional>
 #include <queue>
 #include <variant>
+#include <simdjson.h>
 #include "arbitrage/common/types.hpp"
 #include "arbitrage/common/lockfree_queue.hpp"
 #include "arbitrage/common/spin_wait.hpp"
 #include "arbitrage/common/logger.hpp"
+#include "arbitrage/common/simd_json_parser.hpp"
 
 namespace beast = boost::beast;
 namespace websocket = beast::websocket;
@@ -24,6 +26,46 @@ namespace ssl = boost::asio::ssl;
 using tcp = boost::asio::ip::tcp;
 
 namespace arbitrage {
+
+// =============================================================================
+// 거래소별 필드 매핑 (파싱 코드 공통화용)
+// =============================================================================
+
+struct TickerFieldMap {
+    std::string_view symbol_key;
+    std::string_view price_key;
+    std::string_view bid_key;
+    std::string_view ask_key;
+    std::string_view volume_key;
+    std::string_view timestamp_key;    // empty = use current time
+    int64_t ts_multiplier = 1000;      // ms→us
+    bool bid_ask_fallback = false;     // bid/ask <= 0 시 price로 대체
+};
+
+struct TradeFieldMap {
+    std::string_view symbol_key;
+    std::string_view price_key;
+    std::string_view volume_key;
+    std::string_view timestamp_key;    // empty = use current time
+    int64_t ts_multiplier = 1000;
+};
+
+struct OrderBookFieldMap {
+    std::string_view symbol_key;       // empty = fallback_symbol 사용
+    std::string_view timestamp_key;    // empty = use current time
+    int64_t ts_multiplier = 1000;
+
+    enum Format { OBJECTS, TUPLES } format = OBJECTS;
+
+    // OBJECTS: units[].{ask_price, ask_size, bid_price, bid_size}
+    std::string_view units_key;
+    std::string_view ask_price_key, ask_size_key;
+    std::string_view bid_price_key, bid_size_key;
+    bool filter_zero = false;          // price <= 0 항목 무시
+
+    // TUPLES: bids/asks[].[price, qty]
+    std::string_view bids_key, asks_key;
+};
 
 // WebSocket 이벤트 타입
 struct WebSocketEvent {
@@ -124,9 +166,15 @@ protected:
     
     // 이벤트 발행 (파생 클래스에서 호출)
     void emit_event(WebSocketEvent&& evt);
-    
+
     // 메시지 전송 (파생 클래스에서 호출 가능)
     void send_message(const std::string& message);
+
+    // 공통 파싱 메서드 (FieldMap 기반)
+    Ticker make_ticker(simdjson::dom::element data, const TickerFieldMap& map);
+    OrderBook make_orderbook(simdjson::dom::element data, const OrderBookFieldMap& map,
+                             std::string_view fallback_symbol = "");
+    Ticker make_trade(simdjson::dom::element data, const TradeFieldMap& map);
     
 private:
     // Boost.Beast 핸들러

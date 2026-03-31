@@ -20,10 +20,13 @@ namespace arbitrage {
 // =============================================================================
 // 글로벌 인스턴스
 // =============================================================================
+namespace { DecisionEngine* g_set_decision_engine_override = nullptr; }
 DecisionEngine& decision_engine() {
+    if (g_set_decision_engine_override) return *g_set_decision_engine_override;
     static DecisionEngine instance;
     return instance;
 }
+void set_decision_engine(DecisionEngine* p) { g_set_decision_engine_override = p; }
 
 // =============================================================================
 // 생성자 / 소멸자
@@ -322,12 +325,12 @@ bool DecisionEngine::is_kill_switch_active() const {
 }
 
 void DecisionEngine::set_kill_switch_reason(const std::string& reason) {
-    std::unique_lock lock(kill_reason_mutex_);
+    WriteGuard lock(kill_reason_mutex_);
     kill_switch_reason_ = reason;
 }
 
 std::string DecisionEngine::get_kill_switch_reason() const {
-    std::shared_lock lock(kill_reason_mutex_);
+    ReadGuard lock(kill_reason_mutex_);
     return kill_switch_reason_;
 }
 
@@ -335,7 +338,7 @@ std::string DecisionEngine::get_kill_switch_reason() const {
 // 잔액 관리
 // =============================================================================
 void DecisionEngine::update_balance(const BalanceInfo& balance) {
-    std::unique_lock lock(balance_mutex_);
+    WriteGuard lock(balance_mutex_);
     int idx = static_cast<int>(balance.exchange);
     if (idx >= 0 && idx < 4) {
         balances_[idx] = balance;
@@ -343,7 +346,7 @@ void DecisionEngine::update_balance(const BalanceInfo& balance) {
 }
 
 BalanceInfo DecisionEngine::get_balance(Exchange ex) const {
-    std::shared_lock lock(balance_mutex_);
+    ReadGuard lock(balance_mutex_);
     return balances_[static_cast<int>(ex)];
 }
 

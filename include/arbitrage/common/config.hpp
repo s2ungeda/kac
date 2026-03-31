@@ -1,11 +1,11 @@
 #pragma once
 
 #include "arbitrage/common/types.hpp"
+#include "arbitrage/common/spin_wait.hpp"
 #include <string>
 #include <map>
 #include <vector>
 #include <memory>
-#include <mutex>
 #include <istream>
 
 namespace arbitrage {
@@ -114,7 +114,7 @@ private:
     // YAML 파싱 (config.cpp에서 구현, HAS_YAML_CPP일 때만 사용)
     bool parse_yaml_string(const std::string& yaml_content);
 
-    mutable std::mutex mutex_;
+    mutable RWSpinLock mutex_;
     std::string config_path_;
     std::string cached_yaml_;  // stdin 재로드용 캐시
     

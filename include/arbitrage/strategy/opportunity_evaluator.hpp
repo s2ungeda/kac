@@ -18,7 +18,8 @@
 #include "arbitrage/strategy/decision_engine.hpp"
 
 #include <array>
-#include <shared_mutex>
+
+#include "arbitrage/common/spin_wait.hpp"
 
 namespace arbitrage {
 
@@ -85,7 +86,7 @@ public:
         double qty,
         double price,
         const std::array<BalanceInfo, 4>& balances,
-        std::shared_mutex& balance_mutex,
+        RWSpinLock& balance_mutex,
         DecisionResult& result,
         DecisionEngine::Stats& stats
     );

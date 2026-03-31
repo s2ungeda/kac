@@ -10,11 +10,11 @@
 
 #include "arbitrage/ipc/ipc_protocol.hpp"
 #include "arbitrage/common/logger.hpp"
+#include "arbitrage/common/spin_wait.hpp"
 
 #include <atomic>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -66,7 +66,7 @@ private:
     std::atomic<bool> running_{false};
     std::thread event_thread_;
 
-    std::mutex clients_mutex_;
+    mutable SpinLock clients_mutex_;
     std::vector<int> client_fds_;
     std::unordered_map<int, std::vector<uint8_t>> recv_buffers_;
 

@@ -15,10 +15,13 @@ namespace arbitrage {
 // =============================================================================
 // 글로벌 인스턴스
 // =============================================================================
+namespace { RiskModel* g_set_risk_model_override = nullptr; }
 RiskModel& risk_model() {
+    if (g_set_risk_model_override) return *g_set_risk_model_override;
     static RiskModel instance;
     return instance;
 }
+void set_risk_model(RiskModel* p) { g_set_risk_model_override = p; }
 
 // =============================================================================
 // 생성자
@@ -320,7 +323,7 @@ double RiskModel::calculate_slippage_risk(const SlippageEstimate& estimate) cons
 // 김프 데이터 기록
 // =============================================================================
 void RiskModel::record_premium(Exchange buy_ex, Exchange sell_ex, double premium_pct) {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
 
     int key = premium_key(buy_ex, sell_ex);
     auto& history = premium_history_[key];
@@ -337,7 +340,7 @@ void RiskModel::record_premium(Exchange buy_ex, Exchange sell_ex, double premium
 // 김프 변동성 통계
 // =============================================================================
 PremiumStats RiskModel::get_premium_stats(Exchange buy_ex, Exchange sell_ex) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
 
     PremiumStats result;
     int key = premium_key(buy_ex, sell_ex);
@@ -372,7 +375,7 @@ PremiumStats RiskModel::get_premium_stats(Exchange buy_ex, Exchange sell_ex) con
 // 전체 김프 변동성
 // =============================================================================
 double RiskModel::calculate_overall_volatility() const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
 
     double total_vol = 0;
     int count = 0;
@@ -398,7 +401,7 @@ void RiskModel::record_transfer_time(
     Exchange to,
     std::chrono::seconds elapsed
 ) {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
 
     int key = static_cast<int>(from) * 4 + static_cast<int>(to);
     auto& history = transfer_time_history_[key];
@@ -415,7 +418,7 @@ void RiskModel::record_transfer_time(
 // 송금 시간 통계
 // =============================================================================
 TransferTimeStats RiskModel::get_transfer_stats(Exchange from, Exchange to) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
 
     TransferTimeStats result;
     result.from = from;
@@ -482,7 +485,7 @@ double RiskModel::calculate_var(
 // 설정
 // =============================================================================
 void RiskModel::set_config(const RiskModelConfig& config) {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
     config_ = config;
 }
 

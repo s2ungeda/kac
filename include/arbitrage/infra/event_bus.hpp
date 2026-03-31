@@ -10,14 +10,13 @@
  */
 
 #include "arbitrage/infra/events.hpp"
+#include "arbitrage/common/spin_wait.hpp"
 
 #include <functional>
 #include <memory>
-#include <shared_mutex>
 #include <unordered_map>
 #include <queue>
 #include <thread>
-#include <condition_variable>
 #include <atomic>
 #include <vector>
 #include <typeindex>
@@ -201,13 +200,13 @@ private:
 
 private:
     // 핸들러 저장
-    mutable std::shared_mutex handlers_mutex_;
+    mutable RWSpinLock handlers_mutex_;
     std::unordered_map<uint64_t, GenericHandler> handlers_;
     std::atomic<uint64_t> next_token_id_{1};
 
     // 이벤트 큐 (비동기 모드)
-    mutable std::mutex queue_mutex_;
-    std::condition_variable queue_cv_;
+    mutable SpinLock queue_mutex_;
+    std::atomic<bool> queue_wakeup_{false};
     std::queue<events::Event> event_queue_;
 
     // 워커 스레드
@@ -234,10 +233,10 @@ void EventBus::publish(const E& event) {
     if (running_.load(std::memory_order_acquire)) {
         // 비동기 모드: 큐에 추가
         {
-            std::lock_guard<std::mutex> lock(queue_mutex_);
+            SpinLockGuard lock(queue_mutex_);
             event_queue_.push(std::move(generic_event));
         }
-        queue_cv_.notify_one();
+        queue_wakeup_.store(true, std::memory_order_release);
     } else {
         // 동기 모드: 즉시 dispatch
         dispatch(generic_event);
@@ -254,10 +253,10 @@ void EventBus::publish(E&& event) {
 
     if (running_.load(std::memory_order_acquire)) {
         {
-            std::lock_guard<std::mutex> lock(queue_mutex_);
+            SpinLockGuard lock(queue_mutex_);
             event_queue_.push(std::move(generic_event));
         }
-        queue_cv_.notify_one();
+        queue_wakeup_.store(true, std::memory_order_release);
     } else {
         dispatch(generic_event);
     }
@@ -278,7 +277,7 @@ SubscriptionToken EventBus::subscribe(EventHandler<E> handler) {
     };
 
     {
-        std::unique_lock lock(handlers_mutex_);
+        WriteGuard lock(handlers_mutex_);
         handlers_[token.id()] = std::move(generic);
     }
 

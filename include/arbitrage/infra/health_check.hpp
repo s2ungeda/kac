@@ -11,13 +11,12 @@
  */
 
 #include "arbitrage/infra/events.hpp"
+#include "arbitrage/common/spin_wait.hpp"
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -297,22 +296,21 @@ private:
     HealthCheckerConfig config_;
 
     // 체크 함수
-    mutable std::mutex checks_mutex_;
+    mutable RWSpinLock checks_mutex_;
     std::unordered_map<std::string, CheckFunc> checks_;
 
     // 워커 스레드
     std::thread worker_;
     std::atomic<bool> running_{false};
-    std::condition_variable cv_;
-    std::mutex cv_mutex_;
+    std::atomic<bool> wakeup_{false};
 
     // 상태 캐시
-    mutable std::mutex health_mutex_;
+    mutable RWSpinLock health_mutex_;
     SystemHealth last_health_;
     std::vector<SystemHealth> history_;
 
     // 콜백
-    std::mutex callbacks_mutex_;
+    SpinLock callbacks_mutex_;
     std::vector<AlertCallback> unhealthy_callbacks_;
     std::vector<AlertCallback> degraded_callbacks_;
     std::vector<SystemAlertCallback> status_change_callbacks_;

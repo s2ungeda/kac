@@ -14,10 +14,13 @@ namespace arbitrage {
 // =============================================================================
 // 글로벌 인스턴스
 // =============================================================================
+namespace { AccountManager* g_set_account_manager_override = nullptr; }
 AccountManager& account_manager() {
+    if (g_set_account_manager_override) return *g_set_account_manager_override;
     static AccountManager instance;
     return instance;
 }
+void set_account_manager(AccountManager* p) { g_set_account_manager_override = p; }
 
 // =============================================================================
 // 생성자
@@ -37,62 +40,66 @@ Result<void> AccountManager::add_account(const Account& account) {
         return Error(ErrorCode::InvalidParameter, "Account ID cannot be empty");
     }
 
-    std::unique_lock lock(mutex_);
-
-    if (accounts_.find(account.id) != accounts_.end()) {
-        return Error(ErrorCode::InvalidParameter, "Account already exists: " + account.id);
-    }
-
     Account new_account = account;
     new_account.created_at = std::chrono::system_clock::now();
     new_account.last_used_at = new_account.created_at;
 
-    accounts_[account.id] = new_account;
+    {
+        WriteGuard lock(mutex_);
 
-    lock.unlock();
+        if (accounts_.find(account.id) != accounts_.end()) {
+            return Error(ErrorCode::InvalidParameter, "Account already exists: " + account.id);
+        }
+
+        accounts_[account.id] = new_account;
+    }
+
     notify_change(new_account, "added");
 
     return {};
 }
 
 Result<void> AccountManager::remove_account(const std::string& account_id) {
-    std::unique_lock lock(mutex_);
+    Account removed;
+    {
+        WriteGuard lock(mutex_);
 
-    auto it = accounts_.find(account_id);
-    if (it == accounts_.end()) {
-        return Error(ErrorCode::NotFound, "Account not found: " + account_id);
+        auto it = accounts_.find(account_id);
+        if (it == accounts_.end()) {
+            return Error(ErrorCode::NotFound, "Account not found: " + account_id);
+        }
+
+        removed = it->second;
+        accounts_.erase(it);
     }
 
-    Account removed = it->second;
-    accounts_.erase(it);
-
-    lock.unlock();
     notify_change(removed, "removed");
 
     return {};
 }
 
 Result<void> AccountManager::update_account(const Account& account) {
-    std::unique_lock lock(mutex_);
+    {
+        WriteGuard lock(mutex_);
 
-    auto it = accounts_.find(account.id);
-    if (it == accounts_.end()) {
-        return Error(ErrorCode::NotFound, "Account not found: " + account.id);
+        auto it = accounts_.find(account.id);
+        if (it == accounts_.end()) {
+            return Error(ErrorCode::NotFound, "Account not found: " + account.id);
+        }
+
+        // 생성 시간은 유지
+        auto created_at = it->second.created_at;
+        it->second = account;
+        it->second.created_at = created_at;
     }
 
-    // 생성 시간은 유지
-    auto created_at = it->second.created_at;
-    it->second = account;
-    it->second.created_at = created_at;
-
-    lock.unlock();
     notify_change(account, "updated");
 
     return {};
 }
 
 std::optional<Account> AccountManager::get_account(const std::string& account_id) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
 
     auto it = accounts_.find(account_id);
     if (it == accounts_.end()) {
@@ -103,7 +110,7 @@ std::optional<Account> AccountManager::get_account(const std::string& account_id
 }
 
 std::vector<Account> AccountManager::get_accounts(Exchange exchange) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
 
     std::vector<Account> result;
     for (const auto& [id, account] : accounts_) {
@@ -116,7 +123,7 @@ std::vector<Account> AccountManager::get_accounts(Exchange exchange) const {
 }
 
 std::vector<Account> AccountManager::get_active_accounts(Exchange exchange) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
 
     std::vector<Account> result;
     for (const auto& [id, account] : accounts_) {
@@ -129,7 +136,7 @@ std::vector<Account> AccountManager::get_active_accounts(Exchange exchange) cons
 }
 
 std::vector<Account> AccountManager::get_all_accounts() const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
 
     std::vector<Account> result;
     result.reserve(accounts_.size());
@@ -141,12 +148,12 @@ std::vector<Account> AccountManager::get_all_accounts() const {
 }
 
 size_t AccountManager::count() const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
     return accounts_.size();
 }
 
 size_t AccountManager::count(Exchange exchange) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
 
     size_t cnt = 0;
     for (const auto& [id, account] : accounts_) {
@@ -166,7 +173,7 @@ std::optional<Account> AccountManager::select_account(
     double required_balance,
     const std::string& symbol
 ) {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
 
     // 활성 계정 필터링
     std::vector<Account> candidates;
@@ -310,7 +317,7 @@ void AccountManager::update_balance(
     const std::string& account_id,
     const std::map<std::string, double>& balances
 ) {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
 
     auto it = accounts_.find(account_id);
     if (it == accounts_.end()) {
@@ -322,7 +329,7 @@ void AccountManager::update_balance(
 }
 
 std::map<std::string, double> AccountManager::get_total_balance(Exchange exchange) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
 
     std::map<std::string, double> total;
 
@@ -338,7 +345,7 @@ std::map<std::string, double> AccountManager::get_total_balance(Exchange exchang
 }
 
 double AccountManager::get_total_balance(Exchange exchange, const std::string& symbol) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
 
     double total = 0.0;
 
@@ -361,7 +368,7 @@ void AccountManager::refresh_balances(Exchange exchange) {
 
     std::vector<std::string> account_ids;
     {
-        std::shared_lock lock(mutex_);
+        ReadGuard lock(mutex_);
         for (const auto& [id, account] : accounts_) {
             if (account.exchange == exchange && account.is_active()) {
                 account_ids.push_back(id);
@@ -372,7 +379,7 @@ void AccountManager::refresh_balances(Exchange exchange) {
     for (const auto& id : account_ids) {
         std::optional<Account> account;
         {
-            std::shared_lock lock(mutex_);
+            ReadGuard lock(mutex_);
             auto it = accounts_.find(id);
             if (it != accounts_.end()) {
                 account = it->second;
@@ -396,28 +403,38 @@ void AccountManager::refresh_all_balances() {
 // 상태 관리
 // =============================================================================
 void AccountManager::enable_account(const std::string& account_id) {
-    std::unique_lock lock(mutex_);
-
-    auto it = accounts_.find(account_id);
-    if (it != accounts_.end()) {
-        it->second.enabled = true;
-        it->second.status = AccountStatus::Active;
-        it->second.status_message.clear();
-
-        lock.unlock();
-        notify_change(it->second, "enabled");
+    Account copy;
+    bool found = false;
+    {
+        WriteGuard lock(mutex_);
+        auto it = accounts_.find(account_id);
+        if (it != accounts_.end()) {
+            it->second.enabled = true;
+            it->second.status = AccountStatus::Active;
+            it->second.status_message.clear();
+            copy = it->second;
+            found = true;
+        }
+    }
+    if (found) {
+        notify_change(copy, "enabled");
     }
 }
 
 void AccountManager::disable_account(const std::string& account_id) {
-    std::unique_lock lock(mutex_);
-
-    auto it = accounts_.find(account_id);
-    if (it != accounts_.end()) {
-        it->second.enabled = false;
-
-        lock.unlock();
-        notify_change(it->second, "disabled");
+    Account copy;
+    bool found = false;
+    {
+        WriteGuard lock(mutex_);
+        auto it = accounts_.find(account_id);
+        if (it != accounts_.end()) {
+            it->second.enabled = false;
+            copy = it->second;
+            found = true;
+        }
+    }
+    if (found) {
+        notify_change(copy, "disabled");
     }
 }
 
@@ -426,20 +443,25 @@ void AccountManager::set_account_status(
     AccountStatus status,
     const std::string& message
 ) {
-    std::unique_lock lock(mutex_);
-
-    auto it = accounts_.find(account_id);
-    if (it != accounts_.end()) {
-        it->second.status = status;
-        it->second.status_message = message;
-
-        lock.unlock();
-        notify_change(it->second, "status_changed");
+    Account copy;
+    bool found = false;
+    {
+        WriteGuard lock(mutex_);
+        auto it = accounts_.find(account_id);
+        if (it != accounts_.end()) {
+            it->second.status = status;
+            it->second.status_message = message;
+            copy = it->second;
+            found = true;
+        }
+    }
+    if (found) {
+        notify_change(copy, "status_changed");
     }
 }
 
 void AccountManager::record_order(const std::string& account_id) {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
 
     auto it = accounts_.find(account_id);
     if (it != accounts_.end()) {
@@ -450,7 +472,7 @@ void AccountManager::record_order(const std::string& account_id) {
 }
 
 void AccountManager::record_error(const std::string& account_id) {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
 
     auto it = accounts_.find(account_id);
     if (it != accounts_.end()) {
@@ -466,12 +488,12 @@ void AccountManager::record_error(const std::string& account_id) {
 // 이벤트
 // =============================================================================
 void AccountManager::on_account_change(AccountChangeCallback callback) {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
     change_callbacks_.push_back(std::move(callback));
 }
 
 void AccountManager::notify_change(const Account& account, const std::string& event) {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
     for (const auto& cb : change_callbacks_) {
         cb(account, event);
     }
@@ -481,7 +503,7 @@ void AccountManager::notify_change(const Account& account, const std::string& ev
 // 설정 파일 저장/로드
 // =============================================================================
 Result<void> AccountManager::save_to_file(const std::string& path) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
 
     std::ofstream file(path);
     if (!file) {
@@ -536,7 +558,7 @@ Result<void> AccountManager::load_from_file(const std::string& path) {
         s.erase(s.find_last_not_of(" \t") + 1);
     };
 
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
 
     while (std::getline(file, line)) {
         // 주석과 빈 줄 건너뛰기

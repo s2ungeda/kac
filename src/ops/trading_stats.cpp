@@ -16,10 +16,13 @@ namespace arbitrage {
 // 싱글톤
 // =============================================================================
 
+namespace { TradingStatsTracker* g_set_trading_stats_override = nullptr; }
 TradingStatsTracker& TradingStatsTracker::instance() {
+    if (g_set_trading_stats_override) return *g_set_trading_stats_override;
     static TradingStatsTracker instance;
     return instance;
 }
+void set_trading_stats(TradingStatsTracker* p) { g_set_trading_stats_override = p; }
 
 // =============================================================================
 // 생성자/소멸자
@@ -73,11 +76,8 @@ void TradingStatsTracker::stop() {
         return;  // 이미 중지됨
     }
 
-    // 조건 변수 깨우기
-    {
-        std::lock_guard<std::mutex> lock(cv_mutex_);
-        cv_.notify_all();
-    }
+    // 스핀 대기 깨우기
+    wakeup_.store(true, std::memory_order_release);
 
     // 스레드 정리
     if (auto_save_thread_.joinable()) {
@@ -123,7 +123,7 @@ void TradingStatsTracker::record_trade(const TradeRecord& record) {
 }
 
 void TradingStatsTracker::record_trade(const ExtendedTradeRecord& record) {
-    std::lock_guard<std::mutex> lock(trades_mutex_);
+    WriteGuard lock(trades_mutex_);
 
     // 거래 추가
     trades_.push_back(record);
@@ -136,7 +136,7 @@ void TradingStatsTracker::record_trade(const ExtendedTradeRecord& record) {
 
     // 전체 통계 업데이트
     {
-        std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+        WriteGuard stats_lock(stats_mutex_);
 
         all_time_stats_.total_trades++;
         all_time_stats_.end_time = record.timestamp;
@@ -188,7 +188,7 @@ void TradingStatsTracker::record_trade(const ExtendedTradeRecord& record) {
 void TradingStatsTracker::update_equity(double equity_krw) {
     current_equity_.store(equity_krw, std::memory_order_release);
 
-    std::lock_guard<std::mutex> lock(stats_mutex_);
+    WriteGuard lock(stats_mutex_);
 
     if (equity_krw > peak_equity_) {
         peak_equity_ = equity_krw;
@@ -232,7 +232,7 @@ TradingStats TradingStatsTracker::get_yearly_stats() const {
 }
 
 TradingStats TradingStatsTracker::get_all_time_stats() const {
-    std::lock_guard<std::mutex> lock(stats_mutex_);
+    ReadGuard lock(stats_mutex_);
     return all_time_stats_;
 }
 
@@ -289,7 +289,7 @@ TradingStats TradingStatsTracker::get_stats(
     std::chrono::system_clock::time_point start,
     std::chrono::system_clock::time_point end
 ) const {
-    std::lock_guard<std::mutex> lock(trades_mutex_);
+    ReadGuard lock(trades_mutex_);
 
     std::vector<ExtendedTradeRecord> filtered;
     for (const auto& trade : trades_) {
@@ -322,7 +322,7 @@ size_t TradingStatsTracker::total_trade_count() const {
 }
 
 std::vector<ExtendedTradeRecord> TradingStatsTracker::get_recent_trades(size_t count) const {
-    std::lock_guard<std::mutex> lock(trades_mutex_);
+    ReadGuard lock(trades_mutex_);
 
     std::vector<ExtendedTradeRecord> result;
     size_t start = (trades_.size() > count) ? (trades_.size() - count) : 0;
@@ -338,7 +338,7 @@ std::vector<ExtendedTradeRecord> TradingStatsTracker::get_trades(
     std::chrono::system_clock::time_point start,
     std::chrono::system_clock::time_point end
 ) const {
-    std::lock_guard<std::mutex> lock(trades_mutex_);
+    ReadGuard lock(trades_mutex_);
 
     std::vector<ExtendedTradeRecord> result;
     for (const auto& trade : trades_) {
@@ -391,7 +391,7 @@ TradingStatsConfig TradingStatsTracker::config() const {
 }
 
 void TradingStatsTracker::on_daily_close(StatsCallback callback) {
-    std::lock_guard<std::mutex> lock(callback_mutex_);
+    SpinLockGuard lock(callback_mutex_);
     daily_close_callback_ = std::move(callback);
 }
 
@@ -400,7 +400,7 @@ void TradingStatsTracker::on_daily_close(StatsCallback callback) {
 // =============================================================================
 
 void TradingStatsTracker::reset_stats() {
-    std::lock_guard<std::mutex> lock(stats_mutex_);
+    WriteGuard lock(stats_mutex_);
 
     all_time_stats_ = TradingStats();
     all_time_stats_.start_time = std::chrono::system_clock::now();
@@ -418,7 +418,7 @@ void TradingStatsTracker::reset_all() {
     reset_stats();
 
     {
-        std::lock_guard<std::mutex> lock(trades_mutex_);
+        WriteGuard lock(trades_mutex_);
         trades_.clear();
         total_trades_ever_ = 0;
     }
@@ -432,10 +432,15 @@ void TradingStatsTracker::reset_all() {
 
 void TradingStatsTracker::auto_save_thread() {
     while (running_.load(std::memory_order_acquire)) {
-        std::unique_lock<std::mutex> lock(cv_mutex_);
-        cv_.wait_for(lock, std::chrono::seconds(config_.auto_save_interval_sec), [this] {
-            return !running_.load(std::memory_order_acquire);
-        });
+        // SpinWait with timeout instead of condition_variable
+        wakeup_.store(false, std::memory_order_release);
+        SpinWait::until_for(
+            [this] {
+                return wakeup_.load(std::memory_order_acquire) ||
+                       !running_.load(std::memory_order_acquire);
+            },
+            std::chrono::seconds(config_.auto_save_interval_sec)
+        );
 
         if (running_.load(std::memory_order_acquire)) {
             save();

@@ -16,7 +16,8 @@
 #include <thread>
 #include <functional>
 #include <memory>
-#include <shared_mutex>
+#include "arbitrage/common/spin_wait.hpp"
+
 #include <atomic>
 #include <mutex>
 
@@ -189,7 +190,7 @@ private:
     ThreadManagerConfig config_;
 
     // 스레드 추적
-    mutable std::shared_mutex mutex_;
+    mutable RWSpinLock mutex_;
     std::map<std::string, std::thread::id> thread_ids_;
     std::map<std::string, ThreadConfig> active_configs_;
 

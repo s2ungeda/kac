@@ -1,8 +1,9 @@
 #include "arbitrage/common/http_client.hpp"
 #include <chrono>
 #include <curl/curl.h>
+#include "arbitrage/common/spin_wait.hpp"
+
 #include <sstream>
-#include <mutex>
 
 namespace arbitrage {
 
@@ -111,10 +112,10 @@ public:
 
 // CURL 전역 초기화 (한 번만)
 static bool curl_global_initialized = false;
-static std::mutex curl_init_mutex;
+static SpinLock curl_init_mutex;
 
 CurlHttpClient::CurlHttpClient() : impl_(std::make_unique<Impl>()) {
-    std::lock_guard<std::mutex> lock(curl_init_mutex);
+    SpinLockGuard lock(curl_init_mutex);
     if (!curl_global_initialized) {
         curl_global_init(CURL_GLOBAL_DEFAULT);
         curl_global_initialized = true;

@@ -44,7 +44,7 @@ Watchdog::Watchdog() {
     });
     child_manager_.set_shutdown_func([this]() {
         running_.store(false, std::memory_order_release);
-        cv_.notify_all();
+        wakeup_.store(true, std::memory_order_release);
     });
     child_manager_.set_working_directory(config_.working_directory);
     state_manager_.set_state_directory(config_.state_directory);
@@ -62,7 +62,7 @@ Watchdog::Watchdog(const WatchdogConfig& config)
     });
     child_manager_.set_shutdown_func([this]() {
         running_.store(false, std::memory_order_release);
-        cv_.notify_all();
+        wakeup_.store(true, std::memory_order_release);
     });
     child_manager_.set_working_directory(config_.working_directory);
     state_manager_.set_state_directory(config_.state_directory);
@@ -96,7 +96,7 @@ void Watchdog::stop() {
         return;
     }
 
-    cv_.notify_all();
+    wakeup_.store(true, std::memory_order_release);
 
     // 자식 프로세스 종료 (TASK_40)
     child_manager_.stop_all_children();
@@ -257,7 +257,7 @@ Watchdog::Status Watchdog::get_status() const {
     }
 
     {
-        std::lock_guard<std::mutex> lock(restart_mutex_);
+        SpinLockGuard lock(restart_mutex_);
         if (!restart_history_.empty()) {
             status.last_restart = restart_history_.back().timestamp;
         }
@@ -267,7 +267,7 @@ Watchdog::Status Watchdog::get_status() const {
 }
 
 std::vector<RestartEvent> Watchdog::get_restart_history() const {
-    std::lock_guard<std::mutex> lock(restart_mutex_);
+    SpinLockGuard lock(restart_mutex_);
     return std::vector<RestartEvent>(restart_history_.begin(), restart_history_.end());
 }
 
@@ -296,12 +296,12 @@ void Watchdog::cleanup_old_snapshots(int keep_count) {
 // =============================================================================
 
 void Watchdog::on_restart(RestartCallback callback) {
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    SpinLockGuard lock(callbacks_mutex_);
     restart_callbacks_.push_back(std::move(callback));
 }
 
 void Watchdog::on_alert(AlertCallback callback) {
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    SpinLockGuard lock(callbacks_mutex_);
     alert_callbacks_.push_back(std::move(callback));
 }
 
@@ -310,12 +310,12 @@ void Watchdog::on_heartbeat(HeartbeatCallback callback) {
 }
 
 void Watchdog::set_event_bus(std::shared_ptr<EventBus> bus) {
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    SpinLockGuard lock(callbacks_mutex_);
     event_bus_ = bus;
 }
 
 void Watchdog::set_alert_service(std::shared_ptr<AlertService> service) {
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    SpinLockGuard lock(callbacks_mutex_);
     alert_service_ = service;
 }
 
@@ -377,13 +377,13 @@ void Watchdog::monitor_loop() {
         }
 
         // 대기
-        {
-            std::unique_lock<std::mutex> lock(cv_mutex_);
-            cv_.wait_for(lock,
-                std::chrono::milliseconds(config_.heartbeat_interval_ms),
-                [this]() { return !running_.load(std::memory_order_acquire); }
-            );
-        }
+        wakeup_.store(false, std::memory_order_release);
+        SpinWait::until_for(
+            [this]() {
+                return wakeup_.load(std::memory_order_acquire) ||
+                       !running_.load(std::memory_order_acquire);
+            },
+            std::chrono::milliseconds(config_.heartbeat_interval_ms));
     }
 }
 
@@ -475,7 +475,7 @@ void Watchdog::do_restart(const std::string& reason) {
 
     // 재시작 기록
     {
-        std::lock_guard<std::mutex> lock(restart_mutex_);
+        SpinLockGuard lock(restart_mutex_);
 
         RestartEvent event;
         event.timestamp = std::chrono::system_clock::now();
@@ -496,7 +496,7 @@ void Watchdog::do_restart(const std::string& reason) {
     // 콜백 호출
     std::vector<RestartCallback> callbacks;
     {
-        std::lock_guard<std::mutex> lock(callbacks_mutex_);
+        SpinLockGuard lock(callbacks_mutex_);
         callbacks = restart_callbacks_;
     }
 
@@ -542,7 +542,7 @@ void Watchdog::send_alert(const std::string& level, const std::string& message) 
     // 콜백 호출
     std::vector<AlertCallback> callbacks;
     {
-        std::lock_guard<std::mutex> lock(callbacks_mutex_);
+        SpinLockGuard lock(callbacks_mutex_);
         callbacks = alert_callbacks_;
     }
 
@@ -678,7 +678,7 @@ std::vector<ChildProcessInfo> Watchdog::get_children_status() const {
 }
 
 void Watchdog::check_children() {
-    child_manager_.check_children(running_, cv_);
+    child_manager_.check_children(running_, wakeup_);
 }
 
 std::vector<ChildProcessConfig> Watchdog::make_default_children(

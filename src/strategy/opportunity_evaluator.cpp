@@ -97,11 +97,11 @@ bool OpportunityEvaluator::check_balance(
     double qty,
     double price,
     const std::array<BalanceInfo, 4>& balances,
-    std::shared_mutex& balance_mutex,
+    RWSpinLock& balance_mutex,
     DecisionResult& result,
     DecisionEngine::Stats& stats
 ) {
-    std::shared_lock lock(balance_mutex);
+    ReadGuard lock(balance_mutex);
 
     const auto& buy_balance = balances[static_cast<int>(buy_ex)];
     const auto& sell_balance = balances[static_cast<int>(sell_ex)];

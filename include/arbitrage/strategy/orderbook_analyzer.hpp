@@ -5,7 +5,7 @@
 #include "arbitrage/strategy/slippage_model.hpp"
 #include <map>
 #include <functional>
-#include <shared_mutex>
+#include "arbitrage/common/spin_wait.hpp"
 #include <atomic>
 
 namespace arbitrage {
@@ -192,7 +192,7 @@ private:
     SlippageModel slippage_model_;
 
     // 동기화
-    mutable std::shared_mutex mutex_;
+    mutable RWSpinLock mutex_;
 
     // 콜백
     LiquidityAlertCallback alert_callback_;

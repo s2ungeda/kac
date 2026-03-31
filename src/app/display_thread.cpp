@@ -9,6 +9,7 @@
 
 #include "arbitrage/common/logger.hpp"
 #include "arbitrage/common/fxrate.hpp"
+#include "arbitrage/common/spin_wait.hpp"
 #include "arbitrage/strategy/premium_calc.hpp"
 
 #include <iostream>
@@ -83,11 +84,11 @@ void DisplayThread::join() {
 void DisplayThread::run() {
     int cycle = 0;
     while (deps_.running->load(std::memory_order_relaxed)) {
-        {
-            std::unique_lock<std::mutex> lock(*deps_.cv_mutex);
-            deps_.cv_shutdown->wait_for(lock, std::chrono::seconds(1),
-                [&] { return !deps_.running->load(std::memory_order_relaxed); });
-        }
+        SpinWait::until_for([this] {
+            return !deps_.running_for_wakeup->load(std::memory_order_acquire) ||
+                   deps_.wakeup->load(std::memory_order_acquire);
+        }, std::chrono::seconds(1));
+        deps_.wakeup->store(false, std::memory_order_release);
         if (!deps_.running->load(std::memory_order_relaxed)) break;
 
         cycle++;
@@ -143,10 +144,11 @@ void FxRateThread::run() {
             deps_.logger->debug("FX rate updated: {:.2f} ({})", rate, fx.value().source);
         }
 
-        std::unique_lock<std::mutex> lock(*deps_.cv_mutex);
-        deps_.cv_shutdown->wait_for(lock,
-            std::chrono::seconds(FX_UPDATE_INTERVAL_SEC),
-            [&] { return !deps_.running->load(std::memory_order_relaxed); });
+        SpinWait::until_for([this] {
+            return !deps_.running_for_wakeup->load(std::memory_order_acquire) ||
+                   deps_.wakeup->load(std::memory_order_acquire);
+        }, std::chrono::seconds(FX_UPDATE_INTERVAL_SEC));
+        deps_.wakeup->store(false, std::memory_order_release);
     }
 }
 

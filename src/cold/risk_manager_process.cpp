@@ -5,12 +5,12 @@
 #include "arbitrage/cold/risk_manager_process.hpp"
 #include "arbitrage/common/config.hpp"
 
+#include "arbitrage/common/spin_wait.hpp"
+
 #include <csignal>
 #include <iostream>
 #include <cstring>
 #include <thread>
-#include <condition_variable>
-#include <mutex>
 
 namespace arbitrage {
 
@@ -78,12 +78,10 @@ int RiskManagerProcess::run() {
     logger_->info("Risk Manager running (limit={:.0f} KRW)", config_.daily_loss_limit);
 
     // 메인 루프 — 시그널 대기
-    std::mutex cv_mutex;
-    std::condition_variable cv;
     while (running_.load(std::memory_order_relaxed)) {
-        std::unique_lock<std::mutex> lock(cv_mutex);
-        cv.wait_for(lock, std::chrono::seconds(1),
-            [this] { return !running_.load(std::memory_order_relaxed); });
+        SpinWait::until_for(
+            [this] { return !running_.load(std::memory_order_relaxed); },
+            std::chrono::seconds(1));
     }
 
     // 종료

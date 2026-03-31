@@ -8,12 +8,12 @@
  */
 
 #include "arbitrage/infra/tcp_protocol.hpp"
+#include "arbitrage/common/spin_wait.hpp"
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -202,14 +202,14 @@ private:
                          bool require_auth, int epoll_fd);
 
     // Client state (guarded by clients_mutex_)
-    mutable std::mutex clients_mutex_;
+    mutable RWSpinLock clients_mutex_;
     std::unordered_map<int, ClientInfo> clients_;
     std::unordered_map<int, int> fd_to_client_;
     std::unordered_map<int, std::vector<uint8_t>> recv_buffers_;
     std::atomic<int> next_client_id_{1};
 
     // Callbacks (guarded by callbacks_mutex_)
-    std::mutex callbacks_mutex_;
+    SpinLock callbacks_mutex_;
     MessageCallback on_message_callback_;
     ClientCallback on_connected_callback_;
     ClientCallback on_disconnected_callback_;

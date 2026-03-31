@@ -15,7 +15,7 @@
 #include <vector>
 #include <string>
 #include <memory>
-#include <shared_mutex>
+#include "arbitrage/common/spin_wait.hpp"
 
 namespace arbitrage {
 
@@ -45,7 +45,7 @@ public:
      * @return 등록 성공 여부
      */
     bool register_type(const std::string& type_name, StrategyFactory factory) {
-        std::unique_lock lock(mutex_);
+        WriteGuard lock(mutex_);
         if (factories_.find(type_name) != factories_.end()) {
             return false;  // 이미 등록됨
         }
@@ -57,7 +57,7 @@ public:
      * 전략 타입 등록 해제
      */
     bool unregister_type(const std::string& type_name) {
-        std::unique_lock lock(mutex_);
+        WriteGuard lock(mutex_);
         return factories_.erase(type_name) > 0;
     }
 
@@ -71,7 +71,7 @@ public:
      * @return 생성된 전략 (실패 시 nullptr)
      */
     std::unique_ptr<IStrategy> create(const std::string& type_name) {
-        std::shared_lock lock(mutex_);
+        ReadGuard lock(mutex_);
         auto it = factories_.find(type_name);
         if (it == factories_.end()) {
             return nullptr;
@@ -100,7 +100,7 @@ public:
      * 등록된 전략 타입 목록
      */
     std::vector<std::string> registered_types() const {
-        std::shared_lock lock(mutex_);
+        ReadGuard lock(mutex_);
         std::vector<std::string> types;
         types.reserve(factories_.size());
         for (const auto& [name, _] : factories_) {
@@ -113,7 +113,7 @@ public:
      * 전략 타입 등록 여부 확인
      */
     bool has_type(const std::string& type_name) const {
-        std::shared_lock lock(mutex_);
+        ReadGuard lock(mutex_);
         return factories_.find(type_name) != factories_.end();
     }
 
@@ -121,14 +121,14 @@ public:
      * 등록된 타입 수
      */
     size_t type_count() const {
-        std::shared_lock lock(mutex_);
+        ReadGuard lock(mutex_);
         return factories_.size();
     }
 
 private:
     StrategyRegistry() = default;
 
-    mutable std::shared_mutex mutex_;
+    mutable RWSpinLock mutex_;
     std::map<std::string, StrategyFactory> factories_;
 };
 

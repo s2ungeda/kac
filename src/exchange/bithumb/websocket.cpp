@@ -96,8 +96,25 @@ std::string BithumbWebSocket::build_subscribe_message() {
 }
 
 // =============================================================================
-// simdjson SIMD 가속 파싱 (AVX2/SSE4.2)
+// 필드 매핑 + simdjson SIMD 가속 파싱
 // =============================================================================
+
+namespace {
+    const TickerFieldMap BITHUMB_TICKER_MAP {
+        "code", "trade_price", "best_bid_price", "best_ask_price",
+        "acc_trade_volume_24h", "",  // timestamp empty = use current time
+        0, true  // bid_ask_fallback=true
+    };
+    const OrderBookFieldMap BITHUMB_OB_MAP {
+        "code", "", 0,  // no timestamp from API
+        OrderBookFieldMap::OBJECTS,
+        "orderbook_units", "ask_price", "ask_size", "bid_price", "bid_size", true,
+        "", ""
+    };
+    const TradeFieldMap BITHUMB_TRADE_MAP {
+        "code", "trade_price", "trade_volume", "trade_timestamp", 1000
+    };
+}
 
 void BithumbWebSocket::parse_message(const std::string& message) {
     auto& parser = thread_local_simd_parser();
@@ -107,13 +124,11 @@ void BithumbWebSocket::parse_message(const std::string& message) {
         return;
     }
 
-    // 에러 응답 처리
     if (simd_has_field(doc, "error")) {
         logger_->error("[Bithumb] Error response");
         return;
     }
 
-    // type 필드 확인
     std::string_view type = simd_get_sv(doc["type"]);
     if (type.empty()) {
         std::string_view status = simd_get_sv(doc["status"]);
@@ -133,107 +148,38 @@ void BithumbWebSocket::parse_message(const std::string& message) {
 }
 
 void BithumbWebSocket::parse_trade_v2(simdjson::dom::element json) {
-    Ticker trade;
-    trade.exchange = Exchange::Bithumb;
-
-    trade.set_symbol(simd_get_sv(json["code"]));
-
-    double trade_price = simd_get_double_or(json["trade_price"]);
-    if (trade_price > 0.0) {
-        trade.price = trade_price;
-        trade.bid = trade.price;
-        trade.ask = trade.price;
-    }
-
-    trade.volume_24h = simd_get_double_or(json["trade_volume"]);
-
-    int64_t ts = simd_get_int64(json["trade_timestamp"]);
-    if (ts > 0) {
-        trade.timestamp_us = ts * 1000;
-    } else {
-        auto now = std::chrono::system_clock::now();
-        trade.timestamp_us = std::chrono::duration_cast<std::chrono::microseconds>(
-            now.time_since_epoch()).count();
-    }
-
-    // SNAPSHOT은 무시 (REALTIME만 처리)
+    // SNAPSHOT 무시 (REALTIME만)
     std::string_view stream_type = simd_get_sv(json["stream_type"]);
-    if (stream_type == "SNAPSHOT") {
-        return;
-    }
+    if (stream_type == "SNAPSHOT") return;
+
+    auto trade = make_trade(json, BITHUMB_TRADE_MAP);
+    if (trade.price <= 0.0) return;
 
     logger_->info("[Bithumb] Trade - Code: {}, Price: {} KRW, Vol: {}",
                   trade.symbol, trade.price, trade.volume_24h);
 
-    WebSocketEvent trade_evt(WebSocketEvent::Type::Trade, Exchange::Bithumb, trade);
-    emit_event(std::move(trade_evt));
+    emit_event({WebSocketEvent::Type::Trade, Exchange::Bithumb, trade});
 
     // Ticker로도 emit (premium calculator용)
     Ticker ticker = trade;
-    WebSocketEvent ticker_evt(WebSocketEvent::Type::Ticker, Exchange::Bithumb, ticker);
-    emit_event(std::move(ticker_evt));
+    emit_event({WebSocketEvent::Type::Ticker, Exchange::Bithumb, ticker});
 }
 
 void BithumbWebSocket::parse_ticker_v2(simdjson::dom::element json) {
-    Ticker ticker;
-    ticker.exchange = Exchange::Bithumb;
-
-    ticker.set_symbol(simd_get_sv(json["code"]));
-
-    ticker.price = simd_get_double_or(json["trade_price"]);
-
-    double bid = simd_get_double_or(json["best_bid_price"]);
-    ticker.bid = (bid > 0.0) ? bid : ticker.price;
-
-    double ask = simd_get_double_or(json["best_ask_price"]);
-    ticker.ask = (ask > 0.0) ? ask : ticker.price;
-
-    ticker.volume_24h = simd_get_double_or(json["acc_trade_volume_24h"]);
-    ticker.set_timestamp_now();
-
+    auto ticker = make_ticker(json, BITHUMB_TICKER_MAP);
     logger_->info("[Bithumb] Ticker - Code: {}, Price: {} KRW",
                   ticker.symbol, ticker.price);
-
-    WebSocketEvent evt(WebSocketEvent::Type::Ticker, Exchange::Bithumb, ticker);
-    emit_event(std::move(evt));
+    emit_event({WebSocketEvent::Type::Ticker, Exchange::Bithumb, ticker});
 }
 
 void BithumbWebSocket::parse_orderbook_v2(simdjson::dom::element json) {
-    OrderBook orderbook;
-    orderbook.exchange = Exchange::Bithumb;
-    orderbook.clear();
-
-    orderbook.set_symbol(simd_get_sv(json["code"]));
-
-    // SIMD 가속 호가 파싱: orderbook_units 배열 순회
-    simdjson::dom::array units;
-    if (json["orderbook_units"].get(units) == simdjson::SUCCESS) {
-        for (auto unit : units) {
-            double ask_price = simd_get_double_or(unit["ask_price"]);
-            double ask_size = simd_get_double_or(unit["ask_size"]);
-            if (ask_price > 0.0) {
-                orderbook.add_ask(ask_price, ask_size);
-            }
-
-            double bid_price = simd_get_double_or(unit["bid_price"]);
-            double bid_size = simd_get_double_or(unit["bid_size"]);
-            if (bid_price > 0.0) {
-                orderbook.add_bid(bid_price, bid_size);
-            }
-        }
-    }
-
-    auto now = std::chrono::system_clock::now();
-    orderbook.timestamp_us = std::chrono::duration_cast<std::chrono::microseconds>(
-        now.time_since_epoch()).count();
+    auto orderbook = make_orderbook(json, BITHUMB_OB_MAP);
 
     if (orderbook.bid_count > 0 && orderbook.ask_count > 0) {
         logger_->info("[Bithumb] OrderBook - Best Bid: {}, Best Ask: {}",
                       orderbook.bids[0].price, orderbook.asks[0].price);
     }
-
-    WebSocketEvent evt(WebSocketEvent::Type::OrderBook, Exchange::Bithumb, orderbook);
-    emit_event(std::move(evt));
+    emit_event({WebSocketEvent::Type::OrderBook, Exchange::Bithumb, orderbook});
 }
 
 }  // namespace arbitrage

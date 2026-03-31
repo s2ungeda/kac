@@ -23,10 +23,10 @@ namespace arbitrage {
 // 글로벌 인스턴스
 // =============================================================================
 static std::unique_ptr<SecretsManager> g_secrets_manager;
-static std::mutex g_secrets_init_mutex;
+static SpinLock g_secrets_init_mutex;
 
 void init_secrets_manager(const std::string& master_password) {
-    std::lock_guard<std::mutex> lock(g_secrets_init_mutex);
+    SpinLockGuard lock(g_secrets_init_mutex);
     g_secrets_manager = std::make_unique<SecretsManager>(master_password);
 }
 
@@ -126,7 +126,7 @@ Result<void> SecretsManager::store(
 
     auto now = std::chrono::system_clock::now();
 
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
 
     SecretEntry entry;
     entry.encrypted_value = encrypted_result.value();
@@ -151,7 +151,7 @@ Result<void> SecretsManager::store(
 }
 
 Result<std::string> SecretsManager::retrieve(const std::string& key) {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
 
     auto it = secrets_.find(key);
     if (it == secrets_.end()) {
@@ -166,7 +166,7 @@ Result<std::string> SecretsManager::retrieve(const std::string& key) {
 }
 
 Result<void> SecretsManager::remove(const std::string& key) {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
 
     auto it = secrets_.find(key);
     if (it == secrets_.end()) {
@@ -181,12 +181,12 @@ Result<void> SecretsManager::remove(const std::string& key) {
 }
 
 bool SecretsManager::contains(const std::string& key) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
     return secrets_.find(key) != secrets_.end();
 }
 
 std::vector<std::string> SecretsManager::list_keys() const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
     std::vector<std::string> keys;
     keys.reserve(secrets_.size());
     for (const auto& [key, _] : secrets_) {
@@ -196,7 +196,7 @@ std::vector<std::string> SecretsManager::list_keys() const {
 }
 
 std::optional<SecretMetadata> SecretsManager::get_metadata(const std::string& key) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
     auto it = secrets_.find(key);
     if (it == secrets_.end()) {
         return std::nullopt;
@@ -208,7 +208,7 @@ std::optional<SecretMetadata> SecretsManager::get_metadata(const std::string& ke
 // 파일 저장/로드
 // =============================================================================
 Result<void> SecretsManager::save_to_file(const std::string& path) {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
 
     std::ofstream file(path, std::ios::binary);
     if (!file) {
@@ -328,7 +328,7 @@ Result<void> SecretsManager::load_from_file(const std::string& path) {
     }
 
     // 성공 시 기존 데이터 교체
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
     salt_ = file_salt;
     secrets_ = std::move(loaded_secrets);
 
@@ -346,7 +346,7 @@ Result<void> SecretsManager::change_master_password(
         return Error(ErrorCode::AuthenticationFailed, "Invalid old password");
     }
 
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
 
     // 모든 시크릿 복호화
     std::map<std::string, std::string> decrypted;
@@ -402,12 +402,12 @@ bool SecretsManager::verify_password(const std::string& password) const {
 // 유틸리티
 // =============================================================================
 size_t SecretsManager::count() const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
     return secrets_.size();
 }
 
 void SecretsManager::clear() {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
     for (auto& [key, entry] : secrets_) {
         secure_zero(entry.encrypted_value.data(), entry.encrypted_value.size());
     }

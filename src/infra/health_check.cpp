@@ -17,10 +17,13 @@ namespace arbitrage {
 // =============================================================================
 // 싱글톤
 // =============================================================================
+namespace { HealthChecker* g_set_health_checker_override = nullptr; }
 HealthChecker& HealthChecker::instance() {
+    if (g_set_health_checker_override) return *g_set_health_checker_override;
     static HealthChecker instance;
     return instance;
 }
+void set_health_checker(HealthChecker* p) { g_set_health_checker_override = p; }
 
 // =============================================================================
 // 생성자/소멸자
@@ -48,17 +51,17 @@ HealthChecker::~HealthChecker() {
 // 체크 함수 등록
 // =============================================================================
 void HealthChecker::register_check(const std::string& name, CheckFunc check) {
-    std::lock_guard<std::mutex> lock(checks_mutex_);
+    WriteGuard lock(checks_mutex_);
     checks_[name] = std::move(check);
 }
 
 void HealthChecker::unregister_check(const std::string& name) {
-    std::lock_guard<std::mutex> lock(checks_mutex_);
+    WriteGuard lock(checks_mutex_);
     checks_.erase(name);
 }
 
 size_t HealthChecker::check_count() const {
-    std::lock_guard<std::mutex> lock(checks_mutex_);
+    ReadGuard lock(checks_mutex_);
     return checks_.size();
 }
 
@@ -72,7 +75,7 @@ SystemHealth HealthChecker::check_all() {
     // 체크 함수 복사 (락 최소화)
     std::unordered_map<std::string, CheckFunc> checks_copy;
     {
-        std::lock_guard<std::mutex> lock(checks_mutex_);
+        ReadGuard lock(checks_mutex_);
         checks_copy = checks_;
     }
 
@@ -150,7 +153,7 @@ SystemHealth HealthChecker::check_all() {
 
     // 캐시 업데이트
     {
-        std::lock_guard<std::mutex> lock(health_mutex_);
+        WriteGuard lock(health_mutex_);
         last_health_ = health;
 
         // 히스토리 추가
@@ -169,7 +172,7 @@ SystemHealth HealthChecker::check_all() {
 ComponentHealth HealthChecker::check_component(const std::string& name) {
     CheckFunc check;
     {
-        std::lock_guard<std::mutex> lock(checks_mutex_);
+        ReadGuard lock(checks_mutex_);
         auto it = checks_.find(name);
         if (it == checks_.end()) {
             ComponentHealth not_found;
@@ -195,7 +198,7 @@ ComponentHealth HealthChecker::check_component(const std::string& name) {
 }
 
 SystemHealth HealthChecker::last_health() const {
-    std::lock_guard<std::mutex> lock(health_mutex_);
+    ReadGuard lock(health_mutex_);
     return last_health_;
 }
 
@@ -204,7 +207,7 @@ ResourceUsage HealthChecker::get_resource_usage() const {
 
     // CPU 측정은 시간 경과 필요하므로 캐시 반환
     {
-        std::lock_guard<std::mutex> lock(health_mutex_);
+        ReadGuard lock(health_mutex_);
         usage = last_health_.resources;
     }
 
@@ -232,7 +235,7 @@ void HealthChecker::stop() {
         return;  // 이미 중지됨
     }
 
-    cv_.notify_all();
+    wakeup_.store(true, std::memory_order_release);
 
     if (worker_.joinable()) {
         worker_.join();
@@ -244,10 +247,13 @@ void HealthChecker::worker_thread() {
         check_all();
 
         // 인터벌 대기 (중간에 stop 가능)
-        std::unique_lock<std::mutex> lock(cv_mutex_);
-        cv_.wait_for(lock, config_.check_interval, [this]() {
-            return !running_.load(std::memory_order_acquire);
-        });
+        wakeup_.store(false, std::memory_order_release);
+        SpinWait::until_for(
+            [this]() {
+                return wakeup_.load(std::memory_order_acquire) ||
+                       !running_.load(std::memory_order_acquire);
+            },
+            config_.check_interval);
     }
 }
 
@@ -255,22 +261,22 @@ void HealthChecker::worker_thread() {
 // 콜백 설정
 // =============================================================================
 void HealthChecker::on_unhealthy(AlertCallback callback) {
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    SpinLockGuard lock(callbacks_mutex_);
     unhealthy_callbacks_.push_back(std::move(callback));
 }
 
 void HealthChecker::on_degraded(AlertCallback callback) {
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    SpinLockGuard lock(callbacks_mutex_);
     degraded_callbacks_.push_back(std::move(callback));
 }
 
 void HealthChecker::on_status_change(SystemAlertCallback callback) {
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    SpinLockGuard lock(callbacks_mutex_);
     status_change_callbacks_.push_back(std::move(callback));
 }
 
 void HealthChecker::set_event_bus(std::shared_ptr<EventBus> bus) {
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    SpinLockGuard lock(callbacks_mutex_);
     event_bus_ = bus;
 }
 
@@ -278,12 +284,12 @@ void HealthChecker::set_event_bus(std::shared_ptr<EventBus> bus) {
 // 설정
 // =============================================================================
 void HealthChecker::set_config(const HealthCheckerConfig& config) {
-    std::lock_guard<std::mutex> lock(health_mutex_);
+    WriteGuard lock(health_mutex_);
     config_ = config;
 }
 
 HealthCheckerConfig HealthChecker::config() const {
-    std::lock_guard<std::mutex> lock(health_mutex_);
+    ReadGuard lock(health_mutex_);
     return config_;
 }
 
@@ -291,7 +297,7 @@ HealthCheckerConfig HealthChecker::config() const {
 // 히스토리
 // =============================================================================
 std::vector<SystemHealth> HealthChecker::get_history() const {
-    std::lock_guard<std::mutex> lock(health_mutex_);
+    ReadGuard lock(health_mutex_);
     return history_;
 }
 
@@ -439,7 +445,7 @@ void HealthChecker::notify_alerts(const SystemHealth& health) {
     std::shared_ptr<EventBus> bus;
 
     {
-        std::lock_guard<std::mutex> lock(callbacks_mutex_);
+        SpinLockGuard lock(callbacks_mutex_);
         unhealthy_cbs = unhealthy_callbacks_;
         degraded_cbs = degraded_callbacks_;
         status_cbs = status_change_callbacks_;

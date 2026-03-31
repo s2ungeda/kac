@@ -96,10 +96,13 @@ std::string Alert::format_text() const {
 // 싱글톤
 // =============================================================================
 
+namespace { AlertService* g_set_alert_service_override = nullptr; }
 AlertService& AlertService::instance() {
+    if (g_set_alert_service_override) return *g_set_alert_service_override;
     static AlertService instance;
     return instance;
 }
+void set_alert_service(AlertService* p) { g_set_alert_service_override = p; }
 
 // =============================================================================
 // 생성자/소멸자
@@ -141,7 +144,7 @@ void AlertService::stop() {
         return;
     }
 
-    cv_.notify_all();
+    wakeup_.store(true, std::memory_order_release);
 
     if (worker_.joinable()) {
         worker_.join();
@@ -165,7 +168,7 @@ std::future<Result<void>> AlertService::send(const Alert& alert) {
 
     if (config_.async_send && running_.load(std::memory_order_acquire)) {
         // 비동기: 큐에 추가
-        std::lock_guard<std::mutex> lock(queue_mutex_);
+        SpinLockGuard lock(queue_mutex_);
 
         if (queue_.size() >= config_.queue_size) {
             promise.set_value(Err<void>(ErrorCode::InternalError, "Alert queue full"));
@@ -173,7 +176,7 @@ std::future<Result<void>> AlertService::send(const Alert& alert) {
         }
 
         queue_.emplace_back(alert, std::move(promise));
-        cv_.notify_one();
+        wakeup_.store(true, std::memory_order_release);
     } else {
         // 동기 전송
         auto result = process_alert(alert);
@@ -221,12 +224,12 @@ void AlertService::send_from(const std::string& source, AlertLevel level,
 // =============================================================================
 
 void AlertService::set_config(const AlertConfig& config) {
-    std::lock_guard<std::mutex> lock(queue_mutex_);
+    SpinLockGuard lock(queue_mutex_);
     config_ = config;
 }
 
 AlertConfig AlertService::config() const {
-    std::lock_guard<std::mutex> lock(queue_mutex_);
+    SpinLockGuard lock(queue_mutex_);
     return config_;
 }
 
@@ -239,7 +242,7 @@ void AlertService::set_event_bus(std::shared_ptr<EventBus> bus) {
 }
 
 size_t AlertService::pending_count() const {
-    std::lock_guard<std::mutex> lock(queue_mutex_);
+    SpinLockGuard lock(queue_mutex_);
     return queue_.size();
 }
 
@@ -252,12 +255,18 @@ void AlertService::worker_thread() {
         std::pair<Alert, std::promise<Result<void>>> item;
         bool has_item = false;
 
-        {
-            std::unique_lock<std::mutex> lock(queue_mutex_);
-            cv_.wait_for(lock, std::chrono::milliseconds(100), [this]() {
-                return !queue_.empty() || !running_.load(std::memory_order_acquire);
-            });
+        // SpinWait with timeout instead of cv.wait_for
+        SpinWait::until_for(
+            [this]() {
+                return wakeup_.load(std::memory_order_acquire) ||
+                       !running_.load(std::memory_order_acquire);
+            },
+            std::chrono::milliseconds(100)
+        );
+        wakeup_.store(false, std::memory_order_release);
 
+        {
+            SpinLockGuard lock(queue_mutex_);
             if (!queue_.empty()) {
                 item = std::move(queue_.front());
                 queue_.pop_front();
@@ -272,7 +281,7 @@ void AlertService::worker_thread() {
     }
 
     // 남은 알림 처리
-    std::lock_guard<std::mutex> lock(queue_mutex_);
+    SpinLockGuard lock(queue_mutex_);
     while (!queue_.empty()) {
         auto& item = queue_.front();
         auto result = process_alert(item.first);
@@ -282,7 +291,7 @@ void AlertService::worker_thread() {
 }
 
 bool AlertService::check_rate_limit(const Alert& alert) {
-    std::lock_guard<std::mutex> lock(rate_limit_mutex_);
+    SpinLockGuard lock(rate_limit_mutex_);
 
     auto now = std::chrono::steady_clock::now();
 

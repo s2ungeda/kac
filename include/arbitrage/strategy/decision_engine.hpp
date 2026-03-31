@@ -20,7 +20,8 @@
 #include <functional>
 #include <memory>
 #include <string>
-#include <shared_mutex>
+
+#include "arbitrage/common/spin_wait.hpp"
 
 namespace arbitrage {
 
@@ -361,11 +362,11 @@ private:
 
     // 킬스위치
     std::atomic<bool> kill_switch_{false};
-    mutable std::shared_mutex kill_reason_mutex_;
+    mutable RWSpinLock kill_reason_mutex_;
     std::string kill_switch_reason_;
 
     // 잔액
-    mutable std::shared_mutex balance_mutex_;
+    mutable RWSpinLock balance_mutex_;
     std::array<BalanceInfo, 4> balances_;  // 거래소별 잔액
 
     // 손익 추적

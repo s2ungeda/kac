@@ -7,12 +7,12 @@
  */
 
 #include "arbitrage/infra/watchdog_client.hpp"
+#include "arbitrage/common/spin_wait.hpp"
 
 #include <atomic>
 #include <chrono>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <vector>
 
 namespace arbitrage {
@@ -92,13 +92,13 @@ public:
     std::chrono::steady_clock::time_point last_heartbeat_steady_time() const;
 
 private:
-    mutable std::mutex heartbeat_mutex_;
+    mutable RWSpinLock heartbeat_mutex_;
     Heartbeat last_heartbeat_;
     std::chrono::steady_clock::time_point last_heartbeat_time_;
 
     std::atomic<int> missed_heartbeat_count_{0};
 
-    std::mutex callbacks_mutex_;
+    SpinLock callbacks_mutex_;
     std::vector<HeartbeatCallback> heartbeat_callbacks_;
 };
 

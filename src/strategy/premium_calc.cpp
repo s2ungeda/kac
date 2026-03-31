@@ -42,72 +42,78 @@ double PremiumCalculator::calc_premium(double buy_krw, double sell_krw) const {
 }
 
 void PremiumCalculator::recalculate() {
-    std::unique_lock lock(mutex_);
-    
+    // 콜백 대상 수집 (락 안에서)
+    std::vector<PremiumInfo> pending_callbacks;
     double fx = fx_rate_.load();
-    
-    // 매트릭스 계산
-    for (int buy = 0; buy < 4; ++buy) {
-        for (int sell = 0; sell < 4; ++sell) {
-            if (buy == sell) {
-                matrix_[buy][sell] = 0.0;
-                continue;
-            }
-            
-            double buy_price = prices_[buy].load();
-            double sell_price = prices_[sell].load();
-            
-            if (buy_price <= 0.0 || sell_price <= 0.0) {
-                matrix_[buy][sell] = std::numeric_limits<double>::quiet_NaN();
-                continue;
-            }
-            
-            double buy_krw = to_krw(static_cast<Exchange>(buy), buy_price);
-            double sell_krw = to_krw(static_cast<Exchange>(sell), sell_price);
-            
-            matrix_[buy][sell] = calc_premium(buy_krw, sell_krw);
-        }
-    }
-    
-    // 콜백 호출 (임계값 이상인 경우)
-    if (callback_) {
+
+    {
+        WriteGuard lock(mutex_);
+
+        // 매트릭스 계산
         for (int buy = 0; buy < 4; ++buy) {
             for (int sell = 0; sell < 4; ++sell) {
-                if (buy == sell) continue;
-                
-                double prem = matrix_[buy][sell];
-                if (!std::isnan(prem) && prem >= threshold_) {
-                    PremiumInfo info;
-                    info.buy_exchange = static_cast<Exchange>(buy);
-                    info.sell_exchange = static_cast<Exchange>(sell);
-                    info.premium_pct = prem;
-                    info.buy_price = to_krw(static_cast<Exchange>(buy), prices_[buy].load());
-                    info.sell_price = to_krw(static_cast<Exchange>(sell), prices_[sell].load());
-                    info.fx_rate = fx;
-                    info.timestamp = std::chrono::system_clock::now();
-                    
-                    // 락 해제 후 콜백 (데드락 방지)
-                    lock.unlock();
-                    callback_(info);
-                    lock.lock();
+                if (buy == sell) {
+                    matrix_[buy][sell] = 0.0;
+                    continue;
+                }
+
+                double buy_price = prices_[buy].load();
+                double sell_price = prices_[sell].load();
+
+                if (buy_price <= 0.0 || sell_price <= 0.0) {
+                    matrix_[buy][sell] = std::numeric_limits<double>::quiet_NaN();
+                    continue;
+                }
+
+                double buy_krw = to_krw(static_cast<Exchange>(buy), buy_price);
+                double sell_krw = to_krw(static_cast<Exchange>(sell), sell_price);
+
+                matrix_[buy][sell] = calc_premium(buy_krw, sell_krw);
+            }
+        }
+
+        // 콜백 대상 수집 (임계값 이상인 경우)
+        if (callback_) {
+            for (int buy = 0; buy < 4; ++buy) {
+                for (int sell = 0; sell < 4; ++sell) {
+                    if (buy == sell) continue;
+
+                    double prem = matrix_[buy][sell];
+                    if (!std::isnan(prem) && prem >= threshold_) {
+                        PremiumInfo info;
+                        info.buy_exchange = static_cast<Exchange>(buy);
+                        info.sell_exchange = static_cast<Exchange>(sell);
+                        info.premium_pct = prem;
+                        info.buy_price = to_krw(static_cast<Exchange>(buy), prices_[buy].load());
+                        info.sell_price = to_krw(static_cast<Exchange>(sell), prices_[sell].load());
+                        info.fx_rate = fx;
+                        info.timestamp = std::chrono::system_clock::now();
+
+                        pending_callbacks.push_back(info);
+                    }
                 }
             }
         }
     }
+
+    // 락 해제 후 콜백 (데드락 방지)
+    for (const auto& info : pending_callbacks) {
+        callback_(info);
+    }
 }
 
 double PremiumCalculator::get_premium(Exchange buy, Exchange sell) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
     return matrix_[static_cast<size_t>(buy)][static_cast<size_t>(sell)];
 }
 
 PremiumMatrix PremiumCalculator::get_matrix() const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
     return matrix_;
 }
 
 std::optional<PremiumInfo> PremiumCalculator::get_best_opportunity() const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
     
     double best_premium = std::numeric_limits<double>::lowest();
     int best_buy = -1, best_sell = -1;
@@ -142,7 +148,7 @@ std::optional<PremiumInfo> PremiumCalculator::get_best_opportunity() const {
 }
 
 std::vector<PremiumInfo> PremiumCalculator::get_opportunities(double min_premium_pct) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
     
     std::vector<PremiumInfo> results;
     

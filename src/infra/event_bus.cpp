@@ -97,7 +97,7 @@ void EventBus::stop() {
     }
 
     // 모든 워커 깨우기
-    queue_cv_.notify_all();
+    queue_wakeup_.store(true, std::memory_order_release);
 
     // 워커 종료 대기
     for (auto& worker : workers_) {
@@ -109,7 +109,7 @@ void EventBus::stop() {
 
     // 남은 이벤트 처리 (동기)
     {
-        std::lock_guard<std::mutex> lock(queue_mutex_);
+        SpinLockGuard lock(queue_mutex_);
         while (!event_queue_.empty()) {
             dispatch(event_queue_.front());
             event_queue_.pop();
@@ -123,7 +123,7 @@ SubscriptionToken EventBus::subscribe_all(GenericHandler handler) {
     auto token = SubscriptionToken(next_token_id_.fetch_add(1, std::memory_order_relaxed));
 
     {
-        std::unique_lock lock(handlers_mutex_);
+        WriteGuard lock(handlers_mutex_);
         handlers_[token.id()] = std::move(handler);
     }
 
@@ -140,17 +140,17 @@ void EventBus::unsubscribe(SubscriptionToken token) {
         return;
     }
 
-    std::unique_lock lock(handlers_mutex_);
+    WriteGuard lock(handlers_mutex_);
     handlers_.erase(token.id());
 }
 
 size_t EventBus::subscriber_count() const {
-    std::shared_lock lock(handlers_mutex_);
+    ReadGuard lock(handlers_mutex_);
     return handlers_.size();
 }
 
 size_t EventBus::pending_event_count() const {
-    std::lock_guard<std::mutex> lock(queue_mutex_);
+    SpinLockGuard lock(queue_mutex_);
     return event_queue_.size();
 }
 
@@ -160,7 +160,7 @@ void EventBus::dispatch(const events::Event& event) {
     // 핸들러 복사 (락 최소화)
     std::vector<GenericHandler> handlers_copy;
     {
-        std::shared_lock lock(handlers_mutex_);
+        ReadGuard lock(handlers_mutex_);
         handlers_copy.reserve(handlers_.size());
         for (const auto& [id, handler] : handlers_) {
             handlers_copy.push_back(handler);
@@ -184,18 +184,24 @@ void EventBus::worker_thread() {
         events::Event event;
         bool has_event = false;
 
-        {
-            std::unique_lock lock(queue_mutex_);
+        // 이벤트 대기 (SpinWait)
+        SpinWait::until([this] {
+            return queue_wakeup_.load(std::memory_order_acquire) ||
+                   !running_.load(std::memory_order_acquire);
+        });
+        queue_wakeup_.store(false, std::memory_order_release);
 
-            // 이벤트 대기
-            queue_cv_.wait(lock, [this] {
-                return !event_queue_.empty() || !running_.load(std::memory_order_acquire);
-            });
-
-            if (!running_.load(std::memory_order_acquire) && event_queue_.empty()) {
+        if (!running_.load(std::memory_order_acquire)) {
+            // 종료 전 남은 이벤트 처리 시도
+            SpinLockGuard lock(queue_mutex_);
+            if (event_queue_.empty()) {
                 break;
             }
-
+            event = std::move(event_queue_.front());
+            event_queue_.pop();
+            has_event = true;
+        } else {
+            SpinLockGuard lock(queue_mutex_);
             if (!event_queue_.empty()) {
                 event = std::move(event_queue_.front());
                 event_queue_.pop();

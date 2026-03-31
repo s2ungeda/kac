@@ -94,8 +94,21 @@ void MEXCWebSocket::send_subscriptions() {
 }
 
 // =============================================================================
-// simdjson SIMD 가속 파싱 (AVX2/SSE4.2)
+// 필드 매핑 + simdjson SIMD 가속 파싱
 // =============================================================================
+
+namespace {
+    const TickerFieldMap MEXC_TICKER_MAP {
+        "symbol", "lastPrice", "bid1", "ask1", "volume24", "timestamp",
+        1000, true  // bid_ask_fallback=true
+    };
+    const OrderBookFieldMap MEXC_OB_MAP {
+        "", "", 0,  // symbol from outer json, no timestamp
+        OrderBookFieldMap::TUPLES,
+        "", "", "", "", "", false,
+        "bids", "asks"
+    };
+}
 
 void MEXCWebSocket::parse_message(const std::string& message) {
     if (message.empty()) return;
@@ -107,7 +120,7 @@ void MEXCWebSocket::parse_message(const std::string& message) {
         return;
     }
 
-    // Pong 응답 처리 (data == "pong")
+    // Pong 응답
     std::string_view data_str;
     if (doc["data"].get(data_str) == simdjson::SUCCESS && data_str == "pong") {
         logger_->debug("[MEXC] Received pong (data)");
@@ -117,19 +130,16 @@ void MEXCWebSocket::parse_message(const std::string& message) {
     std::string_view channel = simd_get_sv(doc["channel"]);
     if (channel.empty()) return;
 
-    // Pong (channel)
     if (channel == "pong") {
         logger_->debug("[MEXC] Received pong (channel)");
         return;
     }
 
-    // 구독 응답
     if (channel == "rs.sub.ticker" || channel == "rs.sub.deal" || channel == "rs.sub.depth") {
         logger_->info("[MEXC] Subscription confirmed: {}", channel);
         return;
     }
 
-    // 데이터 메시지
     if (channel == "push.ticker") {
         parse_ticker(doc);
     } else if (channel == "push.deal") {
@@ -143,32 +153,10 @@ void MEXCWebSocket::parse_ticker(simdjson::dom::element json) {
     simdjson::dom::element data;
     if (json["data"].get(data) != simdjson::SUCCESS) return;
 
-    Ticker ticker;
-    ticker.exchange = Exchange::MEXC;
-    ticker.set_symbol(simd_get_sv(data["symbol"]));
-
-    ticker.price = simd_get_double_or(data["lastPrice"]);
-
-    double bid = simd_get_double_or(data["bid1"]);
-    ticker.bid = (bid > 0.0) ? bid : ticker.price;
-
-    double ask = simd_get_double_or(data["ask1"]);
-    ticker.ask = (ask > 0.0) ? ask : ticker.price;
-
-    ticker.volume_24h = simd_get_double_or(data["volume24"]);
-
-    int64_t ts = simd_get_int64(data["timestamp"]);
-    if (ts > 0) {
-        ticker.timestamp_us = ts * 1000;
-    } else {
-        ticker.set_timestamp_now();
-    }
-
+    auto ticker = make_ticker(data, MEXC_TICKER_MAP);
     logger_->info("[MEXC] Ticker - Symbol: {}, Price: {}, Bid: {}, Ask: {}",
                   ticker.symbol, ticker.price, ticker.bid, ticker.ask);
-
-    WebSocketEvent evt(WebSocketEvent::Type::Ticker, Exchange::MEXC, ticker);
-    emit_event(std::move(evt));
+    emit_event({WebSocketEvent::Type::Ticker, Exchange::MEXC, ticker});
 }
 
 void MEXCWebSocket::parse_deal(simdjson::dom::element json) {
@@ -177,48 +165,40 @@ void MEXCWebSocket::parse_deal(simdjson::dom::element json) {
 
     std::string_view default_symbol = simd_get_sv(json["symbol"]);
 
-    // data가 배열인 경우
+    // data가 배열 또는 단일 객체
     simdjson::dom::array arr;
     if (data.get(arr) == simdjson::SUCCESS) {
         for (auto deal : arr) {
             process_single_deal(deal, default_symbol);
         }
     } else {
-        // 단일 객체
         process_single_deal(data, default_symbol);
     }
 }
 
 void MEXCWebSocket::process_single_deal(simdjson::dom::element deal, std::string_view default_symbol) {
+    // MEXC deal은 필드 폴백이 필요해서 공통 메서드 미사용
     Ticker trade;
     trade.exchange = Exchange::MEXC;
 
     auto sym = simd_get_sv(deal["symbol"]);
-    if (!sym.empty()) {
-        trade.set_symbol(sym);
-    } else {
-        trade.set_symbol(default_symbol);
-    }
+    trade.set_symbol(!sym.empty() ? sym : default_symbol);
 
-    // 체결가
     double price = simd_get_double_or(deal["p"]);
     if (price == 0.0) price = simd_get_double_or(deal["price"]);
     trade.price = price;
     trade.bid = trade.price;
     trade.ask = trade.price;
 
-    // 체결량
     double vol = simd_get_double_or(deal["v"]);
     if (vol == 0.0) vol = simd_get_double_or(deal["vol"]);
     trade.volume_24h = vol;
 
-    // 타임스탬프
     int64_t ts = simd_get_int64(deal["t"]);
     if (ts == 0) ts = simd_get_int64(deal["ts"]);
     if (ts > 0) {
-        // MEXC는 초 단위일 수 있음
-        if (ts < 10000000000LL) ts *= 1000;  // 초 -> 밀리초
-        trade.timestamp_us = ts * 1000;  // 밀리초 -> 마이크로초
+        if (ts < 10000000000LL) ts *= 1000;
+        trade.timestamp_us = ts * 1000;
     } else {
         trade.set_timestamp_now();
     }
@@ -226,63 +206,25 @@ void MEXCWebSocket::process_single_deal(simdjson::dom::element deal, std::string
     logger_->info("[MEXC] Deal - Symbol: {}, Price: {}, Vol: {}",
                   trade.symbol, trade.price, trade.volume_24h);
 
-    WebSocketEvent trade_evt(WebSocketEvent::Type::Trade, Exchange::MEXC, trade);
-    emit_event(std::move(trade_evt));
+    emit_event({WebSocketEvent::Type::Trade, Exchange::MEXC, trade});
 
     // Ticker로도 emit (premium calculator용)
     Ticker ticker = trade;
-    WebSocketEvent ticker_evt(WebSocketEvent::Type::Ticker, Exchange::MEXC, ticker);
-    emit_event(std::move(ticker_evt));
+    emit_event({WebSocketEvent::Type::Ticker, Exchange::MEXC, ticker});
 }
 
 void MEXCWebSocket::parse_depth(simdjson::dom::element json) {
     simdjson::dom::element data;
     if (json["data"].get(data) != simdjson::SUCCESS) return;
 
-    OrderBook orderbook;
-    orderbook.exchange = Exchange::MEXC;
-    orderbook.clear();
-
-    orderbook.set_symbol(simd_get_sv(json["symbol"]));
-
-    // SIMD 가속 호가 파싱: MEXC는 [[price, qty], ...] 형식
-    simdjson::dom::array asks;
-    if (data["asks"].get(asks) == simdjson::SUCCESS) {
-        for (auto ask : asks) {
-            simdjson::dom::array pair;
-            if (ask.get(pair) == simdjson::SUCCESS) {
-                auto it = pair.begin();
-                double price = simd_get_double(*it); ++it;
-                double qty = simd_get_double(*it);
-                orderbook.add_ask(price, qty);
-            }
-        }
-    }
-
-    simdjson::dom::array bids;
-    if (data["bids"].get(bids) == simdjson::SUCCESS) {
-        for (auto bid : bids) {
-            simdjson::dom::array pair;
-            if (bid.get(pair) == simdjson::SUCCESS) {
-                auto it = pair.begin();
-                double price = simd_get_double(*it); ++it;
-                double qty = simd_get_double(*it);
-                orderbook.add_bid(price, qty);
-            }
-        }
-    }
-
-    auto now = std::chrono::system_clock::now();
-    orderbook.timestamp_us = std::chrono::duration_cast<std::chrono::microseconds>(
-        now.time_since_epoch()).count();
+    std::string_view symbol = simd_get_sv(json["symbol"]);
+    auto orderbook = make_orderbook(data, MEXC_OB_MAP, symbol);
 
     if (orderbook.bid_count > 0 && orderbook.ask_count > 0) {
         logger_->info("[MEXC] Depth - Best Bid: {}, Best Ask: {}",
                       orderbook.bids[0].price, orderbook.asks[0].price);
     }
-
-    WebSocketEvent evt(WebSocketEvent::Type::OrderBook, Exchange::MEXC, orderbook);
-    emit_event(std::move(evt));
+    emit_event({WebSocketEvent::Type::OrderBook, Exchange::MEXC, orderbook});
 }
 
 std::chrono::seconds MEXCWebSocket::ping_interval() const {

@@ -10,13 +10,14 @@
  * - 검증 후 적용
  */
 
+#include "arbitrage/common/spin_wait.hpp"
+
 #include <string>
 #include <functional>
 #include <atomic>
 #include <thread>
 #include <chrono>
 #include <vector>
-#include <shared_mutex>
 #include <filesystem>
 
 namespace arbitrage {
@@ -162,7 +163,7 @@ private:
     std::filesystem::file_time_type get_file_mtime() const;
 
     // 멤버 변수
-    mutable std::shared_mutex path_mutex_;
+    mutable RWSpinLock path_mutex_;
     std::string config_path_;
     std::chrono::milliseconds check_interval_;
 
@@ -175,7 +176,7 @@ private:
     std::thread watch_thread_;
 
     // 콜백
-    mutable std::shared_mutex callback_mutex_;
+    mutable RWSpinLock callback_mutex_;
     std::vector<ReloadCallback> reload_callbacks_;
     std::vector<ErrorCallback> error_callbacks_;
     std::vector<ChangeCallback> change_callbacks_;
@@ -238,7 +239,7 @@ private:
     std::atomic<bool> running_{false};
     std::thread watch_thread_;
 
-    mutable std::shared_mutex files_mutex_;
+    mutable RWSpinLock files_mutex_;
     std::vector<WatchedFile> watched_files_;
 };
 

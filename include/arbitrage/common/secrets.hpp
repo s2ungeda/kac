@@ -16,7 +16,8 @@
 #include <array>
 #include <map>
 #include <vector>
-#include <shared_mutex>
+#include "arbitrage/common/spin_wait.hpp"
+
 #include <cstdint>
 #include <chrono>
 #include <optional>
@@ -235,7 +236,7 @@ private:
     };
 
     // 멤버 변수
-    mutable std::shared_mutex mutex_;
+    mutable RWSpinLock mutex_;
     std::array<uint8_t, AES_KEY_SIZE> master_key_;
     std::array<uint8_t, PBKDF2_SALT_SIZE> salt_;
     std::map<std::string, SecretEntry> secrets_;

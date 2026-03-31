@@ -27,14 +27,14 @@ void ChildProcessManager::send_alert(const std::string& level, const std::string
 // =============================================================================
 
 void ChildProcessManager::add_child(const ChildProcessConfig& config) {
-    std::lock_guard<std::mutex> lock(children_mutex_);
+    SpinLockGuard lock(children_mutex_);
     ChildProcessInfo info;
     info.config = config;
     children_[config.name] = info;
 }
 
 void ChildProcessManager::remove_child(const std::string& name) {
-    std::lock_guard<std::mutex> lock(children_mutex_);
+    SpinLockGuard lock(children_mutex_);
     auto it = children_.find(name);
     if (it == children_.end()) return;
 
@@ -49,7 +49,7 @@ void ChildProcessManager::remove_child(const std::string& name) {
 // =============================================================================
 
 void ChildProcessManager::launch_all_children() {
-    std::lock_guard<std::mutex> lock(children_mutex_);
+    SpinLockGuard lock(children_mutex_);
 
     // start_order로 정렬
     std::vector<std::string> ordered_names;
@@ -94,7 +94,7 @@ void ChildProcessManager::launch_all_children() {
 }
 
 void ChildProcessManager::stop_all_children() {
-    std::lock_guard<std::mutex> lock(children_mutex_);
+    SpinLockGuard lock(children_mutex_);
 
     // 역순 종료 (start_order 높은 것부터)
     std::vector<std::string> ordered_names;
@@ -118,7 +118,7 @@ void ChildProcessManager::stop_all_children() {
 }
 
 void ChildProcessManager::restart_child(const std::string& name, const std::string& reason) {
-    std::lock_guard<std::mutex> lock(children_mutex_);
+    SpinLockGuard lock(children_mutex_);
     auto it = children_.find(name);
     if (it == children_.end()) return;
 
@@ -170,9 +170,9 @@ void ChildProcessManager::restart_child(const std::string& name, const std::stri
 // =============================================================================
 
 void ChildProcessManager::check_children(std::atomic<bool>& system_running,
-                                          std::condition_variable& cv) {
+                                          std::atomic<bool>& wakeup) {
 #ifndef _WIN32
-    std::lock_guard<std::mutex> lock(children_mutex_);
+    SpinLockGuard lock(children_mutex_);
 
     for (auto& [name, info] : children_) {
         if (!info.is_running || info.pid <= 0) continue;
@@ -227,7 +227,7 @@ void ChildProcessManager::check_children(std::atomic<bool>& system_running,
                         if (info.config.critical) {
                             send_alert("critical", "Critical child " + name + " cannot restart");
                             system_running.store(false, std::memory_order_release);
-                            cv.notify_all();
+                            wakeup.store(true, std::memory_order_release);
                             return;
                         }
                     }
@@ -236,7 +236,7 @@ void ChildProcessManager::check_children(std::atomic<bool>& system_running,
                                + std::to_string(info.restart_count) + ")");
                     if (info.config.critical) {
                         system_running.store(false, std::memory_order_release);
-                        cv.notify_all();
+                        wakeup.store(true, std::memory_order_release);
                         return;
                     }
                 }
@@ -255,7 +255,7 @@ void ChildProcessManager::check_children(std::atomic<bool>& system_running,
 // =============================================================================
 
 std::vector<ChildProcessInfo> ChildProcessManager::get_children_status() const {
-    std::lock_guard<std::mutex> lock(children_mutex_);
+    SpinLockGuard lock(children_mutex_);
     std::vector<ChildProcessInfo> result;
     result.reserve(children_.size());
     for (const auto& [_, info] : children_) {

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "arbitrage/common/spin_wait.hpp"
+
 #include <memory>
 #include <string>
 #include <iostream>
@@ -8,7 +10,6 @@
 #include <chrono>
 #include <sstream>
 #include <map>
-#include <mutex>
 
 namespace arbitrage {
 
@@ -59,7 +60,7 @@ public:
 
     static LogLevel min_level_;
     static std::ofstream log_file_;
-    static std::mutex file_mutex_;
+    static SpinLock file_mutex_;
 
 private:
     std::string name_;
@@ -99,7 +100,7 @@ private:
 
         // 파일 출력
         if (log_file_.is_open()) {
-            std::lock_guard<std::mutex> lock(file_mutex_);
+            SpinLockGuard lock(file_mutex_);
             log_file_ << log_line << std::endl;
         }
     }
@@ -142,7 +143,7 @@ public:
 
 private:
     static std::map<std::string, std::shared_ptr<SimpleLogger>> loggers_;
-    static std::mutex mutex_;
+    static SpinLock mutex_;
     static bool initialized_;
 };
 

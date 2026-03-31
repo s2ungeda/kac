@@ -1,9 +1,10 @@
 #pragma once
 
 #include "arbitrage/common/error.hpp"
+#include "arbitrage/common/spin_wait.hpp"
+
 #include <string>
 #include <chrono>
-#include <mutex>
 #include <atomic>
 #include <memory>
 #include <functional>
@@ -60,7 +61,7 @@ private:
                                   const std::map<std::string, std::string>& headers = {});
     
 private:
-    mutable std::mutex mutex_;
+    mutable SpinLock mutex_;
     FXRate cached_rate_;
     
     std::atomic<bool> running_{false};

@@ -9,13 +9,13 @@
  * - 상태 업데이트
  */
 
+#include "arbitrage/common/spin_wait.hpp"
+
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -397,11 +397,10 @@ private:
     // 스레드
     std::thread heartbeat_thread_;
     std::thread receive_thread_;
-    std::condition_variable cv_;
-    std::mutex cv_mutex_;
+    std::atomic<bool> wakeup_{false};
 
     // 현재 상태
-    mutable std::mutex status_mutex_;
+    mutable SpinLock status_mutex_;
     std::atomic<uint32_t> active_connections_{0};
     std::atomic<uint32_t> pending_orders_{0};
     std::atomic<uint8_t> component_status_{0};
@@ -410,7 +409,7 @@ private:
     std::atomic<uint64_t> sequence_{0};
 
     // 콜백
-    std::mutex callbacks_mutex_;
+    SpinLock callbacks_mutex_;
     std::vector<CommandCallback> command_callbacks_;
     std::vector<ConnectionCallback> connection_callbacks_;
 
@@ -419,7 +418,7 @@ private:
     std::atomic<uint64_t> command_count_{0};
     std::atomic<int> reconnect_count_{0};
     std::chrono::steady_clock::time_point last_heartbeat_;
-    mutable std::mutex time_mutex_;
+    mutable SpinLock time_mutex_;
 
     // 소켓 (플랫폼별)
     int socket_fd_{-1};

@@ -7,9 +7,9 @@ namespace arbitrage {
 // static 멤버 변수 정의
 LogLevel SimpleLogger::min_level_ = LogLevel::Info;
 std::ofstream SimpleLogger::log_file_;
-std::mutex SimpleLogger::file_mutex_;
+SpinLock SimpleLogger::file_mutex_;
 std::map<std::string, std::shared_ptr<SimpleLogger>> Logger::loggers_;
-std::mutex Logger::mutex_;
+SpinLock Logger::mutex_;
 bool Logger::initialized_ = false;
 
 void Logger::init(
@@ -48,7 +48,7 @@ void Logger::init(
 }
 
 std::shared_ptr<SimpleLogger> Logger::create(const std::string& name) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    SpinLockGuard lock(mutex_);
 
     auto it = loggers_.find(name);
     if (it != loggers_.end()) {
@@ -69,7 +69,7 @@ std::shared_ptr<SimpleLogger> Logger::default_logger() {
 }
 
 void Logger::shutdown() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    SpinLockGuard lock(mutex_);
     loggers_.clear();
 
     if (SimpleLogger::log_file_.is_open()) {

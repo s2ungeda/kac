@@ -11,13 +11,12 @@
  */
 
 #include "arbitrage/common/error.hpp"
+#include "arbitrage/common/spin_wait.hpp"
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <vector>
 
@@ -262,11 +261,11 @@ private:
     std::atomic<ShutdownPhase> phase_{ShutdownPhase::Running};
 
     // 컴포넌트
-    mutable std::mutex mutex_;
+    mutable SpinLock mutex_;
     std::vector<ShutdownComponent> components_;
 
     // 종료 대기
-    std::condition_variable shutdown_cv_;
+    std::atomic<bool> shutdown_wakeup_{false};
     std::string shutdown_reason_;
 
     // 콜백

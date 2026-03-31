@@ -18,10 +18,13 @@ namespace arbitrage {
 // 싱글톤
 // =============================================================================
 
+namespace { WatchdogClient* g_set_watchdog_client_override = nullptr; }
 WatchdogClient& WatchdogClient::instance() {
+    if (g_set_watchdog_client_override) return *g_set_watchdog_client_override;
     static WatchdogClient instance;
     return instance;
 }
+void set_watchdog_client(WatchdogClient* p) { g_set_watchdog_client_override = p; }
 
 // =============================================================================
 // 생성자/소멸자
@@ -161,7 +164,7 @@ void WatchdogClient::stop_heartbeat() {
         return;
     }
 
-    cv_.notify_all();
+    wakeup_.store(true, std::memory_order_release);
 
     if (heartbeat_thread_.joinable()) {
         heartbeat_thread_.join();
@@ -190,7 +193,7 @@ bool WatchdogClient::send_heartbeat_now() {
     if (do_send(data)) {
         heartbeat_count_.fetch_add(1, std::memory_order_relaxed);
 
-        std::lock_guard<std::mutex> lock(time_mutex_);
+        SpinLockGuard lock(time_mutex_);
         last_heartbeat_ = std::chrono::steady_clock::now();
         return true;
     }
@@ -208,13 +211,13 @@ void WatchdogClient::heartbeat_loop() {
         }
 
         // 대기
-        {
-            std::unique_lock<std::mutex> lock(cv_mutex_);
-            cv_.wait_for(lock,
-                std::chrono::milliseconds(config_.heartbeat_interval_ms),
-                [this]() { return !running_.load(std::memory_order_acquire); }
-            );
-        }
+        wakeup_.store(false, std::memory_order_release);
+        SpinWait::until_for(
+            [this]() {
+                return wakeup_.load(std::memory_order_acquire) ||
+                       !running_.load(std::memory_order_acquire);
+            },
+            std::chrono::milliseconds(config_.heartbeat_interval_ms));
     }
 }
 
@@ -285,19 +288,19 @@ Heartbeat WatchdogClient::current_heartbeat() const {
 // =============================================================================
 
 void WatchdogClient::on_command(CommandCallback callback) {
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    SpinLockGuard lock(callbacks_mutex_);
     command_callbacks_.push_back(std::move(callback));
 }
 
 void WatchdogClient::on_connection_change(ConnectionCallback callback) {
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    SpinLockGuard lock(callbacks_mutex_);
     connection_callbacks_.push_back(std::move(callback));
 }
 
 void WatchdogClient::notify_command(WatchdogCommand cmd, const std::string& payload) {
     std::vector<CommandCallback> callbacks;
     {
-        std::lock_guard<std::mutex> lock(callbacks_mutex_);
+        SpinLockGuard lock(callbacks_mutex_);
         callbacks = command_callbacks_;
     }
 
@@ -315,7 +318,7 @@ void WatchdogClient::notify_command(WatchdogCommand cmd, const std::string& payl
 void WatchdogClient::notify_connection_change(bool connected) {
     std::vector<ConnectionCallback> callbacks;
     {
-        std::lock_guard<std::mutex> lock(callbacks_mutex_);
+        SpinLockGuard lock(callbacks_mutex_);
         callbacks = connection_callbacks_;
     }
 
@@ -351,7 +354,7 @@ void WatchdogClient::send_pong() {
 // =============================================================================
 
 std::chrono::steady_clock::time_point WatchdogClient::last_heartbeat_time() const {
-    std::lock_guard<std::mutex> lock(time_mutex_);
+    SpinLockGuard lock(time_mutex_);
     return last_heartbeat_;
 }
 
@@ -360,12 +363,12 @@ std::chrono::steady_clock::time_point WatchdogClient::last_heartbeat_time() cons
 // =============================================================================
 
 void WatchdogClient::set_config(const WatchdogClientConfig& config) {
-    std::lock_guard<std::mutex> lock(status_mutex_);
+    SpinLockGuard lock(status_mutex_);
     config_ = config;
 }
 
 WatchdogClientConfig WatchdogClient::config() const {
-    std::lock_guard<std::mutex> lock(status_mutex_);
+    SpinLockGuard lock(status_mutex_);
     return config_;
 }
 

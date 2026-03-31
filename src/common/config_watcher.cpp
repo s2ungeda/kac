@@ -63,17 +63,17 @@ bool ConfigWatcher::reload() {
 // 콜백 설정
 // =============================================================================
 void ConfigWatcher::on_reload(ReloadCallback cb) {
-    std::unique_lock lock(callback_mutex_);
+    WriteGuard lock(callback_mutex_);
     reload_callbacks_.push_back(std::move(cb));
 }
 
 void ConfigWatcher::on_error(ErrorCallback cb) {
-    std::unique_lock lock(callback_mutex_);
+    WriteGuard lock(callback_mutex_);
     error_callbacks_.push_back(std::move(cb));
 }
 
 void ConfigWatcher::on_change(ChangeCallback cb) {
-    std::unique_lock lock(callback_mutex_);
+    WriteGuard lock(callback_mutex_);
     change_callbacks_.push_back(std::move(cb));
 }
 
@@ -81,7 +81,7 @@ void ConfigWatcher::on_change(ChangeCallback cb) {
 // 설정 경로 변경
 // =============================================================================
 void ConfigWatcher::set_config_path(const std::string& path) {
-    std::unique_lock lock(path_mutex_);
+    WriteGuard lock(path_mutex_);
     config_path_ = path;
 
     // 새 파일의 수정 시각 저장
@@ -110,7 +110,7 @@ void ConfigWatcher::watch_loop() {
 // =============================================================================
 bool ConfigWatcher::check_modified() {
     try {
-        std::shared_lock lock(path_mutex_);
+        ReadGuard lock(path_mutex_);
 
         if (!std::filesystem::exists(config_path_)) {
             return false;
@@ -126,7 +126,7 @@ bool ConfigWatcher::check_modified() {
         ++stats_.error_count;
 
         // 오류 콜백 호출
-        std::shared_lock lock(callback_mutex_);
+        ReadGuard lock(callback_mutex_);
         for (const auto& cb : error_callbacks_) {
             cb(std::string("Failed to check file modification: ") + e.what());
         }
@@ -141,18 +141,19 @@ bool ConfigWatcher::check_modified() {
 bool ConfigWatcher::do_reload() {
     ConfigChangeEvent event;
     {
-        std::shared_lock lock(path_mutex_);
+        ReadGuard lock(path_mutex_);
         event.file_path = config_path_;
     }
     event.timestamp = std::chrono::system_clock::now();
 
     try {
         // 파일 존재 확인
-        std::shared_lock path_lock(path_mutex_);
-        if (!std::filesystem::exists(config_path_)) {
-            throw std::runtime_error("Config file not found: " + config_path_);
+        {
+            ReadGuard path_lock(path_mutex_);
+            if (!std::filesystem::exists(config_path_)) {
+                throw std::runtime_error("Config file not found: " + config_path_);
+            }
         }
-        path_lock.unlock();
 
         // 설정 리로드 성공으로 간주 (실제 Config 로드는 콜백에서 처리)
         last_reload_time_ = event.timestamp;
@@ -161,7 +162,7 @@ bool ConfigWatcher::do_reload() {
 
         // 리로드 콜백 호출 - 실제 설정 리로드는 콜백에서 수행
         {
-            std::shared_lock lock(callback_mutex_);
+            ReadGuard lock(callback_mutex_);
             for (const auto& cb : reload_callbacks_) {
                 cb();
             }
@@ -173,7 +174,7 @@ bool ConfigWatcher::do_reload() {
         event.error_message = e.what();
 
         // 오류 콜백 호출
-        std::shared_lock lock(callback_mutex_);
+        ReadGuard lock(callback_mutex_);
         for (const auto& cb : error_callbacks_) {
             cb(std::string("Failed to reload config: ") + e.what());
         }
@@ -181,7 +182,7 @@ bool ConfigWatcher::do_reload() {
 
     // 변경 이벤트 콜백 호출
     {
-        std::shared_lock lock(callback_mutex_);
+        ReadGuard lock(callback_mutex_);
         for (const auto& cb : change_callbacks_) {
             cb(event);
         }
@@ -211,7 +212,7 @@ MultiConfigWatcher::~MultiConfigWatcher() {
 }
 
 void MultiConfigWatcher::add_file(const std::string& path, std::function<void()> callback) {
-    std::unique_lock lock(files_mutex_);
+    WriteGuard lock(files_mutex_);
 
     // 중복 확인
     for (const auto& wf : watched_files_) {
@@ -232,7 +233,7 @@ void MultiConfigWatcher::add_file(const std::string& path, std::function<void()>
 }
 
 void MultiConfigWatcher::remove_file(const std::string& path) {
-    std::unique_lock lock(files_mutex_);
+    WriteGuard lock(files_mutex_);
 
     watched_files_.erase(
         std::remove_if(
@@ -245,7 +246,7 @@ void MultiConfigWatcher::remove_file(const std::string& path) {
 }
 
 std::vector<std::string> MultiConfigWatcher::watched_files() const {
-    std::shared_lock lock(files_mutex_);
+    ReadGuard lock(files_mutex_);
     std::vector<std::string> paths;
     paths.reserve(watched_files_.size());
     for (const auto& wf : watched_files_) {
@@ -272,7 +273,7 @@ void MultiConfigWatcher::stop() {
 void MultiConfigWatcher::watch_loop() {
     while (running_.load()) {
         {
-            std::shared_lock lock(files_mutex_);
+            ReadGuard lock(files_mutex_);
 
             for (auto& wf : watched_files_) {
                 try {

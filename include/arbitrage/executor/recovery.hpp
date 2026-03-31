@@ -2,14 +2,13 @@
 
 #include "arbitrage/executor/types.hpp"
 #include "arbitrage/exchange/order_base.hpp"
+#include "arbitrage/common/spin_wait.hpp"
 #include <map>
 #include <memory>
 #include <future>
 #include <functional>
 #include <queue>
-#include <mutex>
 #include <atomic>
-#include <condition_variable>
 #include <thread>
 
 namespace arbitrage {
@@ -187,8 +186,8 @@ private:
 
     std::shared_ptr<RecoveryManager> manager_;
     std::queue<RecoveryPlan> queue_;
-    mutable std::mutex mutex_;
-    std::condition_variable cv_;
+    mutable SpinLock mutex_;
+    std::atomic<bool> wakeup_{false};
     std::thread worker_;
     std::atomic<bool> running_{false};
     RecoveryManager::RecoveryCompleteCallback callback_;

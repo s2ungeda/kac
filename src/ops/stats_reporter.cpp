@@ -25,7 +25,7 @@ namespace arbitrage {
 bool StatsReporter::save_trades(
     const TradingStatsConfig& config,
     const std::deque<ExtendedTradeRecord>& trades,
-    std::mutex& trades_mutex
+    RWSpinLock& trades_mutex
 ) {
     try {
         namespace fs = std::filesystem;
@@ -44,7 +44,7 @@ bool StatsReporter::save_trades(
              << "gross_pnl,net_pnl,premium_pct,"
              << "strategy,notes\n";
 
-        std::lock_guard<std::mutex> lock(trades_mutex);
+        ReadGuard lock(trades_mutex);
 
         for (const auto& trade : trades) {
             auto t = std::chrono::system_clock::to_time_t(trade.timestamp);
@@ -81,7 +81,7 @@ bool StatsReporter::save_trades(
 bool StatsReporter::save_daily_stats(
     const TradingStatsConfig& config,
     const std::deque<ExtendedTradeRecord>& trades,
-    std::mutex& trades_mutex
+    RWSpinLock& trades_mutex
 ) {
     try {
         namespace fs = std::filesystem;
@@ -132,9 +132,9 @@ bool StatsReporter::load_trades(
     const TradingStatsConfig& config,
     std::deque<ExtendedTradeRecord>& trades,
     size_t& total_trades_ever,
-    std::mutex& trades_mutex,
+    RWSpinLock& trades_mutex,
     TradingStats& all_time_stats,
-    std::mutex& stats_mutex,
+    RWSpinLock& stats_mutex,
     const StatsCalculator& calculator
 ) {
     try {
@@ -144,7 +144,7 @@ bool StatsReporter::load_trades(
             return false;  // 파일 없음은 에러 아님
         }
 
-        std::lock_guard<std::mutex> lock(trades_mutex);
+        WriteGuard lock(trades_mutex);
         trades.clear();
 
         std::string line;
@@ -190,7 +190,7 @@ bool StatsReporter::load_trades(
 
         // 통계 재계산
         if (!trades.empty()) {
-            std::lock_guard<std::mutex> stats_lock(stats_mutex);
+            WriteGuard stats_lock(stats_mutex);
             all_time_stats = calculator.calculate_stats(
                 std::vector<ExtendedTradeRecord>(trades.begin(), trades.end()),
                 StatsPeriod::AllTime
@@ -210,9 +210,9 @@ bool StatsReporter::load_trades(
 std::vector<DailySummary> StatsReporter::get_daily_summaries(
     int days,
     const std::deque<ExtendedTradeRecord>& trades,
-    std::mutex& trades_mutex
+    RWSpinLock& trades_mutex
 ) const {
-    std::lock_guard<std::mutex> lock(trades_mutex);
+    ReadGuard lock(trades_mutex);
 
     auto now = std::chrono::system_clock::now();
     auto start = now - std::chrono::hours(24 * days);
@@ -261,9 +261,9 @@ std::vector<DailySummary> StatsReporter::get_daily_summaries(
 std::vector<DailySummary> StatsReporter::get_monthly_summaries(
     int months,
     const std::deque<ExtendedTradeRecord>& trades,
-    std::mutex& trades_mutex
+    RWSpinLock& trades_mutex
 ) const {
-    std::lock_guard<std::mutex> lock(trades_mutex);
+    ReadGuard lock(trades_mutex);
 
     auto now = std::chrono::system_clock::now();
     auto start = now - std::chrono::hours(24 * 30 * months);

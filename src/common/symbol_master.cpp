@@ -14,10 +14,13 @@ namespace arbitrage {
 // =============================================================================
 // 글로벌 인스턴스
 // =============================================================================
+namespace { SymbolMaster* g_set_symbol_master_override = nullptr; }
 SymbolMaster& symbol_master() {
+    if (g_set_symbol_master_override) return *g_set_symbol_master_override;
     static SymbolMaster instance;
     return instance;
 }
+void set_symbol_master(SymbolMaster* p) { g_set_symbol_master_override = p; }
 
 // =============================================================================
 // SymbolInfo 메서드
@@ -191,7 +194,7 @@ std::string SymbolMaster::to_unified(Exchange exchange, const std::string& nativ
     // 캐시된 매핑 확인
     std::string key = std::to_string(static_cast<int>(exchange)) + ":" + native;
     {
-        std::shared_lock lock(mutex_);
+        ReadGuard lock(mutex_);
         auto it = native_to_unified_.find(key);
         if (it != native_to_unified_.end()) {
             return it->second;
@@ -217,7 +220,7 @@ std::string SymbolMaster::make_native(Exchange exchange, const std::string& base
 void SymbolMaster::register_symbol(const SymbolInfo& info) {
     std::string key = make_key(info.exchange, info.unified);
 
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
     symbols_[key] = info;
 
     // 역방향 매핑 등록
@@ -226,7 +229,7 @@ void SymbolMaster::register_symbol(const SymbolInfo& info) {
 }
 
 std::optional<SymbolInfo> SymbolMaster::get_info(Exchange exchange, const std::string& symbol) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
 
     // unified로 먼저 검색
     std::string key = make_key(exchange, symbol);
@@ -258,7 +261,7 @@ std::optional<SymbolInfo> SymbolMaster::get_info(
 }
 
 std::vector<SymbolInfo> SymbolMaster::get_symbols(Exchange exchange) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
 
     std::vector<SymbolInfo> result;
     for (const auto& [key, info] : symbols_) {
@@ -271,7 +274,7 @@ std::vector<SymbolInfo> SymbolMaster::get_symbols(Exchange exchange) const {
 }
 
 std::vector<SymbolInfo> SymbolMaster::get_symbols_by_base(const std::string& base) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
 
     std::vector<SymbolInfo> result;
     for (const auto& [key, info] : symbols_) {
@@ -425,7 +428,7 @@ void SymbolMaster::init_xrp_defaults() {
 }
 
 void SymbolMaster::update_from_exchange(Exchange exchange, const std::vector<SymbolInfo>& symbols) {
-    std::unique_lock lock(mutex_);
+    WriteGuard lock(mutex_);
 
     for (const auto& info : symbols) {
         std::string key = make_key(exchange, info.unified);
@@ -440,7 +443,7 @@ void SymbolMaster::update_from_exchange(Exchange exchange, const std::vector<Sym
 // 설정 파일
 // =============================================================================
 Result<void> SymbolMaster::save_to_file(const std::string& path) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
 
     std::ofstream file(path);
     if (!file) {
@@ -482,12 +485,12 @@ Result<void> SymbolMaster::load_from_file(const std::string& path) {
 // 통계
 // =============================================================================
 size_t SymbolMaster::count() const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
     return symbols_.size();
 }
 
 size_t SymbolMaster::count(Exchange exchange) const {
-    std::shared_lock lock(mutex_);
+    ReadGuard lock(mutex_);
 
     size_t cnt = 0;
     for (const auto& [key, info] : symbols_) {

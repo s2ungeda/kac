@@ -13,10 +13,13 @@ namespace arbitrage {
 // =============================================================================
 // 글로벌 인스턴스
 // =============================================================================
+namespace { StrategyExecutor* g_set_strategy_executor_override = nullptr; }
 StrategyExecutor& strategy_executor() {
+    if (g_set_strategy_executor_override) return *g_set_strategy_executor_override;
     static StrategyExecutor instance;
     return instance;
 }
+void set_strategy_executor(StrategyExecutor* p) { g_set_strategy_executor_override = p; }
 
 // =============================================================================
 // 생성자/소멸자
@@ -40,7 +43,7 @@ bool StrategyExecutor::add_strategy(
 ) {
     if (!strategy) return false;
 
-    std::unique_lock lock(strategies_mutex_);
+    WriteGuard lock(strategies_mutex_);
 
     StrategyId id = config.id;
     if (strategies_.find(id) != strategies_.end()) {
@@ -64,7 +67,7 @@ bool StrategyExecutor::add_strategy(const StrategyConfig& config) {
 }
 
 bool StrategyExecutor::remove_strategy(const StrategyId& id) {
-    std::unique_lock lock(strategies_mutex_);
+    WriteGuard lock(strategies_mutex_);
 
     auto it = strategies_.find(id);
     if (it == strategies_.end()) {
@@ -80,7 +83,7 @@ bool StrategyExecutor::remove_strategy(const StrategyId& id) {
 }
 
 bool StrategyExecutor::enable_strategy(const StrategyId& id) {
-    std::unique_lock lock(strategies_mutex_);
+    WriteGuard lock(strategies_mutex_);
 
     auto it = strategies_.find(id);
     if (it == strategies_.end()) {
@@ -93,7 +96,7 @@ bool StrategyExecutor::enable_strategy(const StrategyId& id) {
 }
 
 bool StrategyExecutor::disable_strategy(const StrategyId& id) {
-    std::unique_lock lock(strategies_mutex_);
+    WriteGuard lock(strategies_mutex_);
 
     auto it = strategies_.find(id);
     if (it == strategies_.end()) {
@@ -106,19 +109,19 @@ bool StrategyExecutor::disable_strategy(const StrategyId& id) {
 }
 
 IStrategy* StrategyExecutor::get_strategy(const StrategyId& id) {
-    std::shared_lock lock(strategies_mutex_);
+    ReadGuard lock(strategies_mutex_);
     auto it = strategies_.find(id);
     return it != strategies_.end() ? it->second.get() : nullptr;
 }
 
 const IStrategy* StrategyExecutor::get_strategy(const StrategyId& id) const {
-    std::shared_lock lock(strategies_mutex_);
+    ReadGuard lock(strategies_mutex_);
     auto it = strategies_.find(id);
     return it != strategies_.end() ? it->second.get() : nullptr;
 }
 
 std::vector<StrategyId> StrategyExecutor::strategy_ids() const {
-    std::shared_lock lock(strategies_mutex_);
+    ReadGuard lock(strategies_mutex_);
     std::vector<StrategyId> ids;
     ids.reserve(strategies_.size());
     for (const auto& [id, _] : strategies_) {
@@ -128,7 +131,7 @@ std::vector<StrategyId> StrategyExecutor::strategy_ids() const {
 }
 
 std::vector<StrategyId> StrategyExecutor::active_strategy_ids() const {
-    std::shared_lock lock(strategies_mutex_);
+    ReadGuard lock(strategies_mutex_);
     std::vector<StrategyId> ids;
     for (const auto& [id, enabled] : enabled_) {
         if (enabled) {
@@ -149,7 +152,7 @@ void StrategyExecutor::start() {
 
     // 모든 활성 전략 시작
     {
-        std::shared_lock lock(strategies_mutex_);
+        ReadGuard lock(strategies_mutex_);
         for (auto& [id, strategy] : strategies_) {
             if (enabled_[id]) {
                 strategy->start();
@@ -169,7 +172,7 @@ void StrategyExecutor::stop() {
     }
 
     // 모든 전략 정지
-    std::shared_lock lock(strategies_mutex_);
+    ReadGuard lock(strategies_mutex_);
     for (auto& [id, strategy] : strategies_) {
         strategy->stop();
     }
@@ -178,7 +181,7 @@ void StrategyExecutor::stop() {
 void StrategyExecutor::pause() {
     paused_ = true;
 
-    std::shared_lock lock(strategies_mutex_);
+    ReadGuard lock(strategies_mutex_);
     for (auto& [id, strategy] : strategies_) {
         strategy->pause();
     }
@@ -187,7 +190,7 @@ void StrategyExecutor::pause() {
 void StrategyExecutor::resume() {
     paused_ = false;
 
-    std::shared_lock lock(strategies_mutex_);
+    ReadGuard lock(strategies_mutex_);
     for (auto& [id, strategy] : strategies_) {
         if (enabled_[id]) {
             strategy->resume();
@@ -199,26 +202,26 @@ void StrategyExecutor::resume() {
 // 시장 데이터 수신
 // =============================================================================
 void StrategyExecutor::on_ticker_update(Exchange ex, const Ticker& ticker) {
-    std::unique_lock lock(market_mutex_);
+    WriteGuard lock(market_mutex_);
     current_snapshot_.tickers[static_cast<size_t>(ex)] = ticker;
     current_snapshot_.ticker_valid[static_cast<size_t>(ex)] = true;
     current_snapshot_.set_timestamp_now();
 }
 
 void StrategyExecutor::on_orderbook_update(Exchange ex, const OrderBook& ob) {
-    std::unique_lock lock(market_mutex_);
+    WriteGuard lock(market_mutex_);
     current_snapshot_.orderbooks[static_cast<size_t>(ex)] = ob;
     current_snapshot_.orderbook_valid[static_cast<size_t>(ex)] = true;
     current_snapshot_.set_timestamp_now();
 }
 
 void StrategyExecutor::on_fx_rate_update(double rate) {
-    std::unique_lock lock(market_mutex_);
+    WriteGuard lock(market_mutex_);
     current_snapshot_.fx_rate = rate;
 }
 
 void StrategyExecutor::on_premium_update(const PremiumMatrix& matrix) {
-    std::unique_lock lock(market_mutex_);
+    WriteGuard lock(market_mutex_);
     current_snapshot_.premium_matrix = matrix;
 }
 
@@ -229,12 +232,12 @@ void StrategyExecutor::kill_switch(const char* reason) {
     kill_switch_ = true;
 
     {
-        std::unique_lock lock(kill_reason_mutex_);
+        WriteGuard lock(kill_reason_mutex_);
         kill_switch_reason_ = reason;
     }
 
     // 모든 전략 정지
-    std::shared_lock lock(strategies_mutex_);
+    ReadGuard lock(strategies_mutex_);
     for (auto& [id, strategy] : strategies_) {
         strategy->stop();
     }
@@ -244,7 +247,7 @@ void StrategyExecutor::reset_kill_switch() {
     kill_switch_ = false;
 
     {
-        std::unique_lock lock(kill_reason_mutex_);
+        WriteGuard lock(kill_reason_mutex_);
         kill_switch_reason_.clear();
     }
 }
@@ -254,7 +257,7 @@ void StrategyExecutor::reset_kill_switch() {
 // =============================================================================
 double StrategyExecutor::get_total_daily_pnl() const {
     double total = 0.0;
-    std::shared_lock lock(strategies_mutex_);
+    ReadGuard lock(strategies_mutex_);
     for (const auto& [id, strategy] : strategies_) {
         total += strategy->today_pnl();
     }
@@ -262,7 +265,7 @@ double StrategyExecutor::get_total_daily_pnl() const {
 }
 
 void StrategyExecutor::reset_daily_pnl() {
-    std::shared_lock lock(strategies_mutex_);
+    ReadGuard lock(strategies_mutex_);
     for (auto& [id, strategy] : strategies_) {
         strategy->reset_stats();
     }
@@ -312,7 +315,7 @@ void StrategyExecutor::evaluate_all() {
     std::vector<std::pair<StrategyId, StrategyDecision>> execute_requests;
 
     {
-        std::shared_lock lock(strategies_mutex_);
+        ReadGuard lock(strategies_mutex_);
 
         for (auto& [id, strategy] : strategies_) {
             // 비활성화 전략 스킵
@@ -357,7 +360,7 @@ void StrategyExecutor::evaluate_all() {
 // 시장 스냅샷 생성
 // =============================================================================
 MarketSnapshot StrategyExecutor::create_snapshot() const {
-    std::shared_lock lock(market_mutex_);
+    ReadGuard lock(market_mutex_);
     return current_snapshot_;
 }
 
@@ -446,7 +449,7 @@ void StrategyExecutor::execute_decision(
 
         // 전략에 결과 피드백
         {
-            std::shared_lock lock(strategies_mutex_);
+            ReadGuard lock(strategies_mutex_);
             auto it = strategies_.find(strategy_id);
             if (it != strategies_.end()) {
                 it->second->on_order_result(result);

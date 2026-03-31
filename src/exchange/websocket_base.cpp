@@ -380,4 +380,140 @@ WebSocketClientBase::Stats::Snapshot WebSocketClientBase::get_stats() const {
     return stats_.snapshot();
 }
 
+// =============================================================================
+// 공통 파싱 메서드 (FieldMap 기반, 거래소 코드 중복 제거)
+// =============================================================================
+
+Ticker WebSocketClientBase::make_ticker(simdjson::dom::element data, const TickerFieldMap& map) {
+    Ticker ticker;
+    ticker.exchange = exchange_;
+    ticker.set_symbol(simd_get_sv(data[map.symbol_key]));
+    ticker.price = simd_get_double_or(data[map.price_key]);
+
+    double bid = simd_get_double_or(data[map.bid_key]);
+    ticker.bid = (map.bid_ask_fallback && bid <= 0.0) ? ticker.price : bid;
+
+    double ask = simd_get_double_or(data[map.ask_key]);
+    ticker.ask = (map.bid_ask_fallback && ask <= 0.0) ? ticker.price : ask;
+
+    ticker.volume_24h = simd_get_double_or(data[map.volume_key]);
+
+    if (map.timestamp_key.empty()) {
+        ticker.set_timestamp_now();
+    } else {
+        int64_t ts = simd_get_int64(data[map.timestamp_key]);
+        if (ts > 0) {
+            ticker.timestamp_us = ts * map.ts_multiplier;
+        } else {
+            ticker.set_timestamp_now();
+        }
+    }
+
+    return ticker;
+}
+
+OrderBook WebSocketClientBase::make_orderbook(simdjson::dom::element data,
+                                               const OrderBookFieldMap& map,
+                                               std::string_view fallback_symbol) {
+    OrderBook ob;
+    ob.exchange = exchange_;
+    ob.clear();
+
+    // 심볼 설정 (필드 → 폴백)
+    if (!map.symbol_key.empty()) {
+        auto sym = simd_get_sv(data[map.symbol_key]);
+        if (!sym.empty()) {
+            ob.set_symbol(sym);
+        } else if (!fallback_symbol.empty()) {
+            ob.set_symbol(fallback_symbol);
+        }
+    } else if (!fallback_symbol.empty()) {
+        ob.set_symbol(fallback_symbol);
+    }
+
+    if (map.format == OrderBookFieldMap::OBJECTS) {
+        simdjson::dom::array units;
+        if (data[map.units_key].get(units) == simdjson::SUCCESS) {
+            for (auto unit : units) {
+                double ask_price = simd_get_double_or(unit[map.ask_price_key]);
+                double ask_size = simd_get_double_or(unit[map.ask_size_key]);
+                if (!map.filter_zero || ask_price > 0.0) {
+                    ob.add_ask(ask_price, ask_size);
+                }
+                double bid_price = simd_get_double_or(unit[map.bid_price_key]);
+                double bid_size = simd_get_double_or(unit[map.bid_size_key]);
+                if (!map.filter_zero || bid_price > 0.0) {
+                    ob.add_bid(bid_price, bid_size);
+                }
+            }
+        }
+    } else { // TUPLES
+        simdjson::dom::array bids;
+        if (data[map.bids_key].get(bids) == simdjson::SUCCESS) {
+            for (auto bid : bids) {
+                simdjson::dom::array pair;
+                if (bid.get(pair) == simdjson::SUCCESS) {
+                    auto it = pair.begin();
+                    double price = simd_get_double(*it); ++it;
+                    double qty = simd_get_double(*it);
+                    ob.add_bid(price, qty);
+                }
+            }
+        }
+        simdjson::dom::array asks;
+        if (data[map.asks_key].get(asks) == simdjson::SUCCESS) {
+            for (auto ask : asks) {
+                simdjson::dom::array pair;
+                if (ask.get(pair) == simdjson::SUCCESS) {
+                    auto it = pair.begin();
+                    double price = simd_get_double(*it); ++it;
+                    double qty = simd_get_double(*it);
+                    ob.add_ask(price, qty);
+                }
+            }
+        }
+    }
+
+    // 타임스탬프
+    if (map.timestamp_key.empty()) {
+        auto now = std::chrono::system_clock::now();
+        ob.timestamp_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            now.time_since_epoch()).count();
+    } else {
+        int64_t ts = simd_get_int64(data[map.timestamp_key]);
+        if (ts > 0) {
+            ob.timestamp_us = ts * map.ts_multiplier;
+        } else {
+            auto now = std::chrono::system_clock::now();
+            ob.timestamp_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                now.time_since_epoch()).count();
+        }
+    }
+
+    return ob;
+}
+
+Ticker WebSocketClientBase::make_trade(simdjson::dom::element data, const TradeFieldMap& map) {
+    Ticker trade;
+    trade.exchange = exchange_;
+    trade.set_symbol(simd_get_sv(data[map.symbol_key]));
+    trade.price = simd_get_double_or(data[map.price_key]);
+    trade.bid = trade.price;
+    trade.ask = trade.price;
+    trade.volume_24h = simd_get_double_or(data[map.volume_key]);
+
+    if (map.timestamp_key.empty()) {
+        trade.set_timestamp_now();
+    } else {
+        int64_t ts = simd_get_int64(data[map.timestamp_key]);
+        if (ts > 0) {
+            trade.timestamp_us = ts * map.ts_multiplier;
+        } else {
+            trade.set_timestamp_now();
+        }
+    }
+
+    return trade;
+}
+
 }  // namespace arbitrage

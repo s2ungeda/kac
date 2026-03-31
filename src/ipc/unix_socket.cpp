@@ -102,7 +102,7 @@ void UnixSocketServer::stop() {
 
     // 클라이언트 정리
     {
-        std::lock_guard<std::mutex> lock(clients_mutex_);
+        SpinLockGuard lock(clients_mutex_);
         for (int fd : client_fds_) {
             ::close(fd);
         }
@@ -138,12 +138,12 @@ void UnixSocketServer::on_client_disconnected(ConnectCallback cb) {
 }
 
 size_t UnixSocketServer::client_count() const {
-    std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(clients_mutex_));
+    SpinLockGuard lock(clients_mutex_);
     return client_fds_.size();
 }
 
 void UnixSocketServer::broadcast(uint8_t type, const void* data, size_t len) {
-    std::lock_guard<std::mutex> lock(clients_mutex_);
+    SpinLockGuard lock(clients_mutex_);
     for (int fd : client_fds_) {
         send_frame(fd, type, data, len);
     }
@@ -206,7 +206,7 @@ void UnixSocketServer::handle_accept() {
         }
 
         {
-            std::lock_guard<std::mutex> lock(clients_mutex_);
+            SpinLockGuard lock(clients_mutex_);
             client_fds_.push_back(client_fd);
             recv_buffers_[client_fd] = {};
         }
@@ -233,7 +233,7 @@ void UnixSocketServer::handle_client_read(int fd) {
             return;
         }
 
-        std::lock_guard<std::mutex> lock(clients_mutex_);
+        SpinLockGuard lock(clients_mutex_);
         auto& buf = recv_buffers_[fd];
         buf.insert(buf.end(), tmp, tmp + n);
 
@@ -264,7 +264,7 @@ void UnixSocketServer::handle_client_read(int fd) {
 void UnixSocketServer::remove_client(int fd) {
 #ifdef __linux__
     {
-        std::lock_guard<std::mutex> lock(clients_mutex_);
+        SpinLockGuard lock(clients_mutex_);
         client_fds_.erase(
             std::remove(client_fds_.begin(), client_fds_.end(), fd),
             client_fds_.end());

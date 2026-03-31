@@ -579,14 +579,14 @@ void Application::register_shutdown_handlers() {
     if (engine_mode_) {
         shutdown_mgr.register_component("shm_feeds", [this] {
             running_.store(false, std::memory_order_relaxed);
-            cv_shutdown_.notify_all();
+            wakeup_.store(true, std::memory_order_release);
             // SHM segments are cleaned up by ShmFeedQueue destructor
             logger_->info("SHM feed queues detached");
         }, ShutdownPriority::Network, std::chrono::seconds(2));
     } else {
         shutdown_mgr.register_component("websockets", [this] {
             running_.store(false, std::memory_order_relaxed);
-            cv_shutdown_.notify_all();
+            wakeup_.store(true, std::memory_order_release);
             upbit_ws_->disconnect();
             binance_ws_->disconnect();
             bithumb_ws_->disconnect();
@@ -785,8 +785,8 @@ void Application::start_threads() {
             deps.price_binance = &price_binance_;
             deps.price_mexc = &price_mexc_;
             deps.current_fx_rate = &current_fx_rate_;
-            deps.cv_mutex = &cv_mutex_;
-            deps.cv_shutdown = &cv_shutdown_;
+            deps.wakeup = &wakeup_;
+            deps.running_for_wakeup = &running_;
             deps.running = &running_;
             DisplayThread thread(std::move(deps));
             thread.run();
@@ -800,8 +800,8 @@ void Application::start_threads() {
         deps.calculator = calculator_.get();
         deps.current_fx_rate = &current_fx_rate_;
         deps.logger = logger_;
-        deps.cv_mutex = &cv_mutex_;
-        deps.cv_shutdown = &cv_shutdown_;
+        deps.wakeup = &wakeup_;
+        deps.running_for_wakeup = &running_;
         deps.running = &running_;
         FxRateThread thread(std::move(deps));
         thread.run();
@@ -833,7 +833,7 @@ void Application::wait_for_shutdown() {
 // =============================================================================
 void Application::cleanup() {
     running_.store(false, std::memory_order_relaxed);
-    cv_shutdown_.notify_all();
+    wakeup_.store(true, std::memory_order_release);
 
     if (hot_thread_.joinable()) hot_thread_.join();
     if (order_thread_.joinable()) order_thread_.join();

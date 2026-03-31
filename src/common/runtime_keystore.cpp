@@ -149,9 +149,12 @@ void RuntimeKeyStore::harden_process() {
 // =============================================================================
 // 글로벌 인스턴스
 // =============================================================================
+namespace { RuntimeKeyStore* g_set_runtime_keystore_override = nullptr; }
 RuntimeKeyStore& runtime_keystore() {
+    if (g_set_runtime_keystore_override) return *g_set_runtime_keystore_override;
     static RuntimeKeyStore instance;
     return instance;
 }
+void set_runtime_keystore(RuntimeKeyStore* p) { g_set_runtime_keystore_override = p; }
 
 }  // namespace arbitrage

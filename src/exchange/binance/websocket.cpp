@@ -73,8 +73,23 @@ std::string BinanceWebSocket::build_subscribe_message() {
 }
 
 // =============================================================================
-// simdjson SIMD 가속 파싱 (AVX2/SSE4.2)
+// 필드 매핑 + simdjson SIMD 가속 파싱
 // =============================================================================
+
+namespace {
+    const TickerFieldMap BINANCE_TICKER_MAP {
+        "s", "c", "b", "a", "v", "E", 1000, false
+    };
+    const OrderBookFieldMap BINANCE_OB_MAP {
+        "s", "E", 1000,
+        OrderBookFieldMap::TUPLES,
+        "", "", "", "", "", false,
+        "bids", "asks"
+    };
+    const TradeFieldMap BINANCE_TRADE_MAP {
+        "s", "p", "q", "T", 1000
+    };
+}
 
 void BinanceWebSocket::parse_message(const std::string& message) {
     auto& parser = thread_local_simd_parser();
@@ -84,13 +99,12 @@ void BinanceWebSocket::parse_message(const std::string& message) {
         return;
     }
 
-    // Combined Stream 메시지 형식: {"stream": "...", "data": {...}}
+    // Combined Stream: {"stream": "...", "data": {...}}
     if (simd_has_field(doc, "stream") && simd_has_field(doc, "data")) {
         std::string_view stream = simd_get_sv(doc["stream"]);
         simdjson::dom::element data;
         if (doc["data"].get(data) != simdjson::SUCCESS) return;
 
-        // 스트림 이름에서 심볼 추출 (예: "xrpusdt@depth10" -> "XRPUSDT")
         std::string symbol;
         auto at_pos = stream.find('@');
         if (at_pos != std::string_view::npos) {
@@ -107,10 +121,9 @@ void BinanceWebSocket::parse_message(const std::string& message) {
             parse_trade(data);
         }
     }
-    // 단일 스트림 메시지: {"e": "eventType", ...}
+    // 단일 스트림: {"e": "eventType", ...}
     else if (simd_has_field(doc, "e")) {
         std::string_view event_type = simd_get_sv(doc["e"]);
-
         if (event_type == "24hrTicker") {
             parse_ticker(doc);
         } else if (event_type == "depthUpdate") {
@@ -122,97 +135,28 @@ void BinanceWebSocket::parse_message(const std::string& message) {
 }
 
 void BinanceWebSocket::parse_ticker(simdjson::dom::element data) {
-    Ticker ticker;
-    ticker.exchange = Exchange::Binance;
-    ticker.set_symbol(simd_get_sv(data["s"]));
-    ticker.price = simd_get_double_or(data["c"]);   // Last price (문자열)
-    ticker.bid = simd_get_double_or(data["b"]);      // Best bid
-    ticker.ask = simd_get_double_or(data["a"]);      // Best ask
-    ticker.volume_24h = simd_get_double_or(data["v"]); // Volume
-    ticker.timestamp_us = simd_get_int64(data["E"]) * 1000;
-
+    auto ticker = make_ticker(data, BINANCE_TICKER_MAP);
     logger_->info("[Binance] Ticker - Symbol: {}, Price: {} USDT",
                   ticker.symbol, ticker.price);
-
-    WebSocketEvent evt(WebSocketEvent::Type::Ticker, Exchange::Binance, ticker);
-    emit_event(std::move(evt));
+    emit_event({WebSocketEvent::Type::Ticker, Exchange::Binance, ticker});
 }
 
 void BinanceWebSocket::parse_orderbook(simdjson::dom::element data, std::string_view stream_symbol) {
-    OrderBook orderbook;
-    orderbook.exchange = Exchange::Binance;
-    orderbook.clear();
-
-    // 심볼 추출
-    auto sym = simd_get_sv(data["s"]);
-    if (!sym.empty()) {
-        orderbook.set_symbol(sym);
-    } else if (!stream_symbol.empty()) {
-        orderbook.set_symbol(stream_symbol);
-    }
-
-    // SIMD 가속 호가 파싱: Binance는 [["price", "qty"], ...] 형식
-    simdjson::dom::array bids;
-    if (data["bids"].get(bids) == simdjson::SUCCESS) {
-        for (auto bid : bids) {
-            simdjson::dom::array pair;
-            if (bid.get(pair) == simdjson::SUCCESS) {
-                auto it = pair.begin();
-                double price = simd_get_double(*it); ++it;
-                double qty = simd_get_double(*it);
-                orderbook.add_bid(price, qty);
-            }
-        }
-    }
-
-    simdjson::dom::array asks;
-    if (data["asks"].get(asks) == simdjson::SUCCESS) {
-        for (auto ask : asks) {
-            simdjson::dom::array pair;
-            if (ask.get(pair) == simdjson::SUCCESS) {
-                auto it = pair.begin();
-                double price = simd_get_double(*it); ++it;
-                double qty = simd_get_double(*it);
-                orderbook.add_ask(price, qty);
-            }
-        }
-    }
-
-    // 타임스탬프 (밀리초 → 마이크로초)
-    int64_t ts = simd_get_int64(data["E"]);
-    if (ts > 0) {
-        orderbook.timestamp_us = ts * 1000;
-    } else {
-        auto now = std::chrono::system_clock::now();
-        orderbook.timestamp_us = std::chrono::duration_cast<std::chrono::microseconds>(
-            now.time_since_epoch()).count();
-    }
+    auto orderbook = make_orderbook(data, BINANCE_OB_MAP, stream_symbol);
 
     if (orderbook.bid_count > 0 && orderbook.ask_count > 0) {
         logger_->info("[Binance] OrderBook - Symbol: {}, Bids: {}, Asks: {}, BestBid: {}, BestAsk: {}",
                       orderbook.symbol, orderbook.bid_count, orderbook.ask_count,
                       orderbook.best_bid(), orderbook.best_ask());
     }
-
-    WebSocketEvent evt(WebSocketEvent::Type::OrderBook, Exchange::Binance, orderbook);
-    emit_event(std::move(evt));
+    emit_event({WebSocketEvent::Type::OrderBook, Exchange::Binance, orderbook});
 }
 
 void BinanceWebSocket::parse_trade(simdjson::dom::element data) {
-    Ticker trade;
-    trade.exchange = Exchange::Binance;
-    trade.set_symbol(simd_get_sv(data["s"]));
-    trade.price = simd_get_double_or(data["p"]);
-    trade.bid = trade.price;
-    trade.ask = trade.price;
-    trade.volume_24h = simd_get_double_or(data["q"]);
-    trade.timestamp_us = simd_get_int64(data["T"]) * 1000;
-
+    auto trade = make_trade(data, BINANCE_TRADE_MAP);
     logger_->info("[Binance] Trade - Symbol: {}, Price: {} USDT",
                   trade.symbol, trade.price);
-
-    WebSocketEvent evt(WebSocketEvent::Type::Trade, Exchange::Binance, trade);
-    emit_event(std::move(evt));
+    emit_event({WebSocketEvent::Type::Trade, Exchange::Binance, trade});
 }
 
 }  // namespace arbitrage

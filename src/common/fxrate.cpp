@@ -182,7 +182,7 @@ Result<FXRate> FXRateService::fetch() {
         rate.rate = investing_result.value();
         rate.source = "investing";
         
-        std::lock_guard<std::mutex> lock(mutex_);
+        SpinLockGuard lock(mutex_);
         cached_rate_ = rate;
         
         return Ok(std::move(rate));
@@ -194,7 +194,7 @@ Result<FXRate> FXRateService::fetch() {
         rate.rate = bok_result.value();
         rate.source = "bok";
         
-        std::lock_guard<std::mutex> lock(mutex_);
+        SpinLockGuard lock(mutex_);
         cached_rate_ = rate;
         
         return Ok(std::move(rate));
@@ -206,7 +206,7 @@ Result<FXRate> FXRateService::fetch() {
         rate.rate = fallback_result.value();
         rate.source = "fallback";
         
-        std::lock_guard<std::mutex> lock(mutex_);
+        SpinLockGuard lock(mutex_);
         cached_rate_ = rate;
         
         return Ok(std::move(rate));
@@ -214,7 +214,7 @@ Result<FXRate> FXRateService::fetch() {
     
     // 4. 캐시된 데이터 사용 (최후의 수단)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        SpinLockGuard lock(mutex_);
         if (cached_rate_.is_valid()) {
             auto age = std::chrono::duration_cast<std::chrono::seconds>(
                 rate.timestamp - cached_rate_.timestamp).count();
@@ -233,7 +233,7 @@ Result<FXRate> FXRateService::fetch() {
 }
 
 FXRate FXRateService::get_cached() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    SpinLockGuard lock(mutex_);
     return cached_rate_;
 }
 
