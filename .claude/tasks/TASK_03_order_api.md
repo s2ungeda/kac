@@ -1,24 +1,26 @@
 # TASK 03: 주문 API (4개 거래소)
 
 ## 🎯 목표
-libcurl 기반 4개 거래소 REST API 주문 구현
+4개 거래소 주문 제출 구현 (REST API + 바이낸스 WS API)
 
 ---
 
-## ⚠️ 국내 거래소 통신 방식 (중요!)
+## ⚠️ 거래소별 주문 제출 방식 (중요!)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  주문 흐름                                                      │
+│  거래소별 주문 제출 방식                                         │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│   [주문 실행]     REST API  ────────────────────────────────→  │
-│                   • 동기 호출, 주문 접수 확인                    │
-│                   • 거래소별 인증 방식 다름                      │
+│  업비트    : REST API (POST /v1/orders, JWT 인증)               │
+│  빗썸     : REST API (HMAC-SHA512 인증)                         │
+│  MEXC     : REST API (HMAC-SHA256 인증)                         │
+│  ─────────────────────────────────────────────────────────────  │
+│  바이낸스  : WS API (order.place, HMAC-SHA256 서명)             │
+│             → 같은 연결로 주문 제출 + 체결 수신 가능             │
+│             → REST 대비 ~1-5ms 절감 (TCP/TLS 핸드셰이크 생략)   │
 │                                                                 │
-│   [체결 통보]     WebSocket  ←────────────────────────────────  │
-│                   • 실시간 체결 알림                            │
-│                   • TASK_02에서 구현                            │
+│  [체결 통보]  Private WebSocket (TASK_02에서 구현)               │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -64,11 +66,16 @@ tests/unit/exchange/
 
 | 항목 | 업비트 | 바이낸스 | 빗썸 | MEXC |
 |------|--------|----------|------|------|
-| **인증** | JWT (HS256) | HMAC-SHA256 | HMAC-SHA512 | HMAC-SHA256 |
+| **주문 방식** | REST | **WS API** | REST | REST |
+| **인증** | JWT (HS512) | HMAC-SHA256 (WS 메시지) | HMAC-SHA512 | HMAC-SHA256 |
 | **Rate Limit** | 초당 8회 | 분당 1200회 | 초당 10회 | 초당 20회 |
 | **단위** | 계정 | IP | 계정 | IP |
 | **심볼** | KRW-XRP | XRPUSDT | XRP | XRPUSDT |
-| **주문 URL** | /v1/orders | /api/v3/order | /trade/place | /api/v3/order |
+| **주문 URL** | /v1/orders | WS `order.place` | /trade/place | /api/v3/order |
+
+> **바이낸스**: WS API(`wss://ws-api.binance.com:443/ws-api/v3`)로 주문 제출.
+> Private WS와 같은 연결 사용 가능 — TCP/TLS 핸드셰이크 생략으로 ~1-5ms 절감.
+> REST API와 rate limit 풀 공유.
 
 ---
 
@@ -193,41 +200,60 @@ std::string UpbitOrderClient::create_jwt_token(const std::string& query_string) 
 }
 ```
 
-### 2. 바이낸스 (Binance)
+### 2. 바이낸스 (Binance) — WS API 주문
+
+> 바이낸스는 REST 대신 **WS API로 주문 제출**.
+> Private WS(TASK_02)와 같은 연결을 공유하여 주문 제출 + 체결 수신을 단일 연결로 처리.
+> 참고: `docs/PRIVATE_WEBSOCKET_SPEC.md` 바이낸스 섹션
 
 ```cpp
 // binance/order.hpp
-class BinanceOrderClient : public OrderClientBase {
+// WS API 기반 주문 클라이언트
+class BinanceWsOrderClient : public OrderClientBase {
 public:
-    BinanceOrderClient(const std::string& api_key, const std::string& secret_key);
-    
+    // Private WS 연결을 공유
+    BinanceWsOrderClient(BinancePrivateWebSocket& ws,
+                         const std::string& api_key,
+                         const std::string& secret_key);
+
     Result<OrderResult> place_order(const OrderRequest& req) override;
     Result<OrderResult> cancel_order(const std::string& order_id) override;
     Result<OrderResult> get_order(const std::string& order_id) override;
     Result<Balance> get_balance(const std::string& currency) override;
-    
+
     Exchange exchange() const override { return Exchange::Binance; }
     std::string name() const override { return "Binance"; }
-    
+
 private:
-    // HMAC-SHA256 서명
-    std::string sign_request(const std::string& query_string);
-    
+    // WS API 요청에 HMAC-SHA256 서명 추가
+    // params를 알파벳순 정렬 → key=value&... → HMAC-SHA256
+    std::string sign_params(const std::map<std::string, std::string>& params);
+
+    // WS API 요청 전송 + 응답 대기
+    Result<json> send_request(const std::string& method,
+                              std::map<std::string, std::string> params);
+
+    BinancePrivateWebSocket& ws_;
     std::string api_key_;
     std::string secret_key_;
-    std::unique_ptr<HttpClient> http_;
 };
 
-// 서명 예시
-std::string BinanceOrderClient::sign_request(const std::string& query_string) {
-    // timestamp 추가
-    std::string params = query_string + "&timestamp=" + std::to_string(get_timestamp_ms());
-    
-    // HMAC-SHA256
-    std::string signature = hmac_sha256(secret_key_, params);
-    
-    return params + "&signature=" + signature;
-}
+// WS API 주문 요청 예시
+// {
+//   "id": "uuid",
+//   "method": "order.place",
+//   "params": {
+//     "symbol": "XRPUSDT", "side": "SELL", "type": "LIMIT",
+//     "timeInForce": "GTC", "price": "0.6500", "quantity": "100.00",
+//     "apiKey": "...", "timestamp": 1660801715431, "signature": "..."
+//   }
+// }
+
+// WS API 주요 메서드:
+// order.place          — 신규 주문
+// order.cancel         — 주문 취소
+// order.cancelReplace  — 원자적 취소+신규 (STOP_ON_FAILURE / ALLOW_FAILURE)
+// order.status         — 주문 조회
 ```
 
 ### 3. 빗썸 (Bithumb)
@@ -326,25 +352,43 @@ if (result) {
 
 ## ✅ 완료 조건 체크리스트
 
+### REST 기반 주문 (업비트/빗썸/MEXC)
+
 ```
-□ OrderClientBase 공통 인터페이스
-□ 업비트 주문 (UpbitOrderClient)
-  □ JWT 인증 (HS256)
-  □ query_hash (SHA512)
-  □ 주문/취소/조회/잔고
-□ 바이낸스 주문 (BinanceOrderClient)
-  □ HMAC-SHA256 서명
-  □ 주문/취소/조회/잔고
-□ 빗썸 주문 (BithumbOrderClient)
-  □ HMAC-SHA512 서명
-  □ x-www-form-urlencoded
-  □ 주문/취소/조회/잔고
-□ MEXC 주문 (MEXCOrderClient)
-  □ HMAC-SHA256 서명
-  □ 주문/취소/조회/잔고
-□ Rate Limiter 통합
-□ 에러 처리 및 재시도
-□ 단위 테스트
+[x] OrderClientBase 공통 인터페이스
+[x] 업비트 주문 (UpbitOrderClient)
+  [x] JWT 인증 (HS512)
+  [x] query_hash (SHA512)
+  [x] 주문/취소/조회/잔고
+[ ] 빗썸 주문 (BithumbOrderClient)
+  [ ] HMAC-SHA512 서명
+  [ ] x-www-form-urlencoded
+  [ ] 주문/취소/조회/잔고
+[ ] MEXC 주문 (MEXCOrderClient)
+  [ ] HMAC-SHA256 서명
+  [ ] 주문/취소/조회/잔고
+```
+
+### WS API 기반 주문 (바이낸스)
+
+```
+[ ] BinanceWsOrderClient
+  [ ] Private WS 연결 공유 (TASK_02 BinancePrivateWebSocket)
+  [ ] HMAC-SHA256 요청별 서명
+  [ ] order.place (신규 주문)
+  [ ] order.cancel (주문 취소)
+  [ ] order.cancelReplace (원자적 취소+신규)
+  [ ] order.status (주문 조회)
+  [ ] 응답 파싱 (status, fills, rateLimits)
+  [ ] 가격/수량 String→double 변환
+```
+
+### 공통
+
+```
+[x] Rate Limiter 통합
+[ ] 에러 처리 및 재시도
+[ ] 단위 테스트
 ```
 
 ---

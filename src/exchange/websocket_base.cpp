@@ -137,14 +137,10 @@ void WebSocketClientBase::on_ssl_handshake(beast::error_code ec) {
     
     // WebSocket handshake
     ws_->set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
-    
-    // 기본 User-Agent만 설정
-    ws_->set_option(websocket::stream_base::decorator(
-        [](websocket::request_type& req) {
-            req.set(boost::beast::http::field::user_agent, 
-                   "kimchi-arbitrage-cpp/1.0");
-        }));
-    
+
+    // 파생 클래스에서 오버라이드 가능 (Private WS: Authorization 헤더 추가)
+    configure_handshake();
+
     ws_->async_handshake(host_, target_,
         beast::bind_front_handler(
             &WebSocketClientBase::on_handshake,
@@ -378,6 +374,21 @@ void WebSocketClientBase::emit_event(WebSocketEvent&& evt) {
 
 WebSocketClientBase::Stats::Snapshot WebSocketClientBase::get_stats() const {
     return stats_.snapshot();
+}
+
+// =============================================================================
+// 핸드셰이크 설정 (Private WS에서 오버라이드)
+// =============================================================================
+
+void WebSocketClientBase::configure_handshake() {
+    // 기본: User-Agent만 설정
+    set_ws_decorator([](websocket::request_type& req) {
+        req.set(boost::beast::http::field::user_agent, "kimchi-arbitrage-cpp/1.0");
+    });
+}
+
+void WebSocketClientBase::set_ws_decorator(DecoratorFunc decorator) {
+    ws_->set_option(websocket::stream_base::decorator(std::move(decorator)));
 }
 
 // =============================================================================

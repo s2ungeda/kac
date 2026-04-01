@@ -126,8 +126,23 @@ Result<OrderResult> UpbitOrderClient::place_order(const OrderRequest& req) {
 
         OrderResult result;
         result.set_order_id(json["uuid"].get<std::string>().c_str());
-        result.status = OrderStatus::Pending;
 
+        // 초기 상태 파싱
+        std::string state = json.value("state", "wait");
+        if (state == "wait") result.status = OrderStatus::Open;
+        else if (state == "done") result.status = OrderStatus::Filled;
+        else if (state == "cancel") result.status = OrderStatus::Canceled;
+        else result.status = OrderStatus::Pending;
+
+        // 체결 정보
+        if (json.contains("executed_volume")) {
+            result.filled_qty = std::stod(json["executed_volume"].get<std::string>());
+        }
+        if (json.contains("avg_price") && !json["avg_price"].is_null()) {
+            result.avg_price = std::stod(json["avg_price"].get<std::string>());
+        }
+
+        result.timestamp_us = get_timestamp_us();
         return Ok(std::move(result));
 
     } catch (const std::exception& e) {
@@ -155,10 +170,29 @@ Result<OrderResult> UpbitOrderClient::cancel_order(const std::string& order_id) 
         );
     }
 
-    return Err<OrderResult>(
-        ErrorCode::NotImplemented,
-        "Response parsing not implemented"
-    );
+    try {
+        auto json = nlohmann::json::parse(resp.value().body);
+
+        OrderResult result;
+        result.set_order_id(json["uuid"].get<std::string>().c_str());
+
+        std::string state = json.value("state", "");
+        if (state == "cancel") result.status = OrderStatus::Canceled;
+        else result.status = OrderStatus::Pending;
+
+        if (json.contains("executed_volume")) {
+            result.filled_qty = std::stod(json["executed_volume"].get<std::string>());
+        }
+
+        result.timestamp_us = get_timestamp_us();
+        return Ok(std::move(result));
+
+    } catch (const std::exception& e) {
+        return Err<OrderResult>(
+            ErrorCode::ParseError,
+            std::string("Failed to parse cancel response: ") + e.what()
+        );
+    }
 }
 
 Result<OrderResult> UpbitOrderClient::get_order(const std::string& order_id) {
@@ -176,10 +210,37 @@ Result<OrderResult> UpbitOrderClient::get_order(const std::string& order_id) {
         );
     }
 
-    return Err<OrderResult>(
-        ErrorCode::NotImplemented,
-        "Response parsing not implemented"
-    );
+    try {
+        auto json = nlohmann::json::parse(resp.value().body);
+
+        OrderResult result;
+        result.set_order_id(json["uuid"].get<std::string>().c_str());
+
+        std::string state = json.value("state", "");
+        if (state == "wait") result.status = OrderStatus::Open;
+        else if (state == "done") result.status = OrderStatus::Filled;
+        else if (state == "cancel") result.status = OrderStatus::Canceled;
+        else result.status = OrderStatus::Pending;
+
+        if (json.contains("executed_volume")) {
+            result.filled_qty = std::stod(json["executed_volume"].get<std::string>());
+        }
+        if (json.contains("avg_price") && !json["avg_price"].is_null()) {
+            result.avg_price = std::stod(json["avg_price"].get<std::string>());
+        }
+        if (json.contains("paid_fee")) {
+            result.commission = std::stod(json["paid_fee"].get<std::string>());
+        }
+
+        result.timestamp_us = get_timestamp_us();
+        return Ok(std::move(result));
+
+    } catch (const std::exception& e) {
+        return Err<OrderResult>(
+            ErrorCode::ParseError,
+            std::string("Failed to parse get_order response: ") + e.what()
+        );
+    }
 }
 
 Result<Balance> UpbitOrderClient::get_balance(const std::string& currency) {
@@ -196,10 +257,27 @@ Result<Balance> UpbitOrderClient::get_balance(const std::string& currency) {
         );
     }
 
-    return Err<Balance>(
-        ErrorCode::NotImplemented,
-        "Response parsing not implemented"
-    );
+    try {
+        auto json = nlohmann::json::parse(resp.value().body);
+
+        for (const auto& account : json) {
+            if (account["currency"].get<std::string>() == currency) {
+                Balance balance;
+                balance.set_currency(currency.c_str());
+                balance.available = std::stod(account["balance"].get<std::string>());
+                balance.locked = std::stod(account["locked"].get<std::string>());
+                return Ok(std::move(balance));
+            }
+        }
+
+        return Err<Balance>(ErrorCode::NotFound, "Currency not found: " + currency);
+
+    } catch (const std::exception& e) {
+        return Err<Balance>(
+            ErrorCode::ParseError,
+            std::string("Failed to parse balance response: ") + e.what()
+        );
+    }
 }
 
 }  // namespace arbitrage

@@ -163,12 +163,20 @@ protected:
         return std::chrono::seconds(30); 
     }
     virtual void on_connected() {}
-    
+
+    // Private WS용: 핸드셰이크 시 커스텀 헤더 설정 (Authorization 등)
+    // 기본 구현은 User-Agent만 설정
+    virtual void configure_handshake();
+
     // 이벤트 발행 (파생 클래스에서 호출)
     void emit_event(WebSocketEvent&& evt);
 
     // 메시지 전송 (파생 클래스에서 호출 가능)
     void send_message(const std::string& message);
+
+    // WS 핸드셰이크 데코레이터 설정 (configure_handshake에서 사용)
+    using DecoratorFunc = std::function<void(websocket::request_type&)>;
+    void set_ws_decorator(DecoratorFunc decorator);
 
     // 공통 파싱 메서드 (FieldMap 기반)
     Ticker make_ticker(simdjson::dom::element data, const TickerFieldMap& map);

@@ -339,47 +339,230 @@ int main() {
 
 ---
 
-## ⚠️ 국내 거래소 주문 방식 (참고)
+## ⚠️ 거래소별 통신 방식 정리
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  업비트/빗썸 통신 방식                                          │
+│  거래소별 WebSocket 채널 구분                                    │
 ├─────────────────────────────────────────────────────────────────┤
-│  시세 수신      : WebSocket (이 태스크)                         │
-│  호가 수신      : WebSocket (이 태스크)                         │
-│  ─────────────────────────────────────────────────────────────  │
-│  주문 실행      : REST API (TASK_03)                           │
-│  주문 체결 통보 : WebSocket (myTrade 구독)                     │
+│                                                                 │
+│  [Public WS]  시세/호가/체결 수신 (인증 불필요)                  │
+│               → 이 태스크 전반부 (기 구현 완료)                  │
+│                                                                 │
+│  [Private WS] 주문 체결/취소/잔고 실시간 수신 (인증 필요)        │
+│               → 이 태스크 후반부 (미구현 — 아래 참조)            │
+│                                                                 │
+│  [주문 제출]  REST API 또는 WS API (TASK_03)                    │
+│               → 바이낸스만 WS API 주문 가능                      │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📡 Private WebSocket — 실시간 주문 업데이트 수신
+
+> **참고 사양서**: `docs/PRIVATE_WEBSOCKET_SPEC.md`
+
+### 거래소별 Private WS 요약
+
+| 거래소 | 엔드포인트 | 인증 | 포맷 | 주문 채널 | 잔고 채널 |
+|--------|-----------|------|------|-----------|-----------|
+| 업비트 | `wss://api.upbit.com/websocket/v1/private` | JWT (HS512) 헤더 | JSON | `myOrder` | `myAsset` |
+| 빗썸 | `wss://ws-api.bithumb.com/websocket/v1/private` | JWT (HS256) 헤더 | JSON | `myOrder` | `myAsset` |
+| 바이낸스 | `wss://ws-api.binance.com:443/ws-api/v3` | HMAC 서명 (WS 메시지) | JSON | `executionReport` | `outboundAccountPosition` |
+| MEXC | `wss://wbs.mexc.com/ws?listenKey=<KEY>` | listenKey (REST 발급) | **Protobuf** | `spot@private.orders.v3.api` | `spot@private.account.v3.api` |
+
+### 공통 출력 구조체
+
+모든 거래소의 Private 메시지를 아래 공통 구조체로 변환:
+
+```cpp
+struct OrderUpdate {
+    Exchange exchange;
+    char order_id[48];          // 거래소 발급 ID (REST 응답 대기 없이도)
+    char client_order_id[48];   // ★ 핵심 매칭 키 — 제출 전 우리가 생성한 ID
+                                // OrderTracker가 이 ID로 주문 쌍(매수/매도)을 추적
+                                // 형식: "arb_{request_id}_{buy|sell}"
+    OrderStatus status;         // Open/PartiallyFilled/Filled/Canceled/Failed
+    OrderSide side;
+    double filled_qty;
+    double remaining_qty;
+    double avg_price;
+    double last_fill_price;
+    double last_fill_qty;
+    double commission;
+    int64_t timestamp_ms;
+    bool is_maker;
+};
+```
+
+### 1. 업비트 Private WS
+
+```cpp
+// 인증: WebSocket 핸드셰이크 시 Authorization 헤더에 JWT 포함
+// JWT: HS512, payload = {access_key, nonce(UUID), timestamp}
+
+// 구독 메시지
+[
+  {"ticket": "unique-uuid"},
+  {"type": "myOrder", "codes": ["KRW-XRP"]},
+  {"format": "SIMPLE"}
+]
+
+// 수신 필드 (SIMPLE 모드)
+// ty="myOrder", cd, uid, ab(ASK/BID), s(wait/trade/done/cancel),
+// ev(체결수량), rv(미체결수량), ap(평균가), pf(수수료), ttms, otms
+// ★ id(identifier) → client_order_id로 매핑
+```
+
+- Ping 30초, 유휴 120초 타임아웃
+- 연결 제한: 초당 5회, 메시지 초당 5건
+
+### 2. 빗썸 Private WS
+
+```cpp
+// 인증: 업비트와 동일 방식 (JWT 헤더, HS256)
+// API 2.0 KEY 필수
+
+// 구독 메시지 (업비트와 동일 형식)
+[
+  {"ticket": "unique-id"},
+  {"type": "myOrder", "codes": ["KRW-XRP"]},
+  {"format": "SIMPLE"}
+]
+
+// 수신 필드: 업비트와 거의 동일
+// ★ coid(client_order_id) → client_order_id로 매핑
+```
+
+- 업비트와 공통 베이스 클래스로 통합 가능
+
+### 3. 바이낸스 Private WS
+
+```cpp
+// 인증: 같은 WS 연결에서 메시지로 인증
+{
+  "id": "uuid",
+  "method": "userDataStream.subscribe.signature",
+  "params": {
+    "apiKey": "YOUR_KEY",
+    "signature": "HMAC_SHA256_SIGNATURE",
+    "timestamp": 1649729878532
+  }
+}
+
+// 수신 이벤트: executionReport
+// 주요 필드: e, s, S(side), o(type), x(executionType), X(orderStatus),
+// i(orderId), l(lastFilledQty), z(cumulativeFilledQty), L(lastFilledPrice),
+// n(commission), m(isMaker)
+// ★ c(clientOrderId) → client_order_id로 매핑
+// ※ 모든 가격/수량이 String
+```
+
+- 같은 연결로 주문 제출도 가능 (TASK_03 참조)
+- Pong 60초 내 응답 필요, 최대 24시간
+
+### 4. MEXC Private WS
+
+```cpp
+// 인증: REST로 listenKey 발급 후 URL 파라미터로 전달
+// POST /api/v3/userDataStream → {"listenKey": "..."}
+// 연결: wss://wbs.mexc.com/ws?listenKey=<KEY>
+
+// 구독 메시지
+{"method": "SUBSCRIPTION", "params": ["spot@private.orders.v3.api"], "id": 1}
+
+// ⚠️ Protobuf 인코딩 — JSON이 아님
+// proto: PrivateOrdersV3Api (id, clientId, price, quantity, avgPrice, status, ...)
+// ★ clientId → client_order_id로 매핑
+// protoc로 C++ 코드 생성 필요, CMake에 libprotobuf 추가
+```
+
+- listenKey 60분 만료 (PUT keepalive 30분마다)
+- 구독 없이 30초, 데이터 없이 60초 후 연결 해제
+
+### 📁 추가 생성할 파일
+
+```
+include/arbitrage/exchange/
+├── private_ws_base.hpp              # Private WS 공통 베이스
+├── upbit/private_websocket.hpp      # 업비트 Private WS
+├── binance/private_websocket.hpp    # 바이낸스 Private WS
+├── bithumb/private_websocket.hpp    # 빗썸 Private WS
+└── mexc/private_websocket.hpp       # MEXC Private WS
+
+src/exchange/
+├── private_ws_base.cpp
+├── upbit/private_websocket.cpp
+├── binance/private_websocket.cpp
+├── bithumb/private_websocket.cpp
+└── mexc/private_websocket.cpp
+
+proto/                               # MEXC Protobuf 정의
+└── mexc_private.proto
 ```
 
 ---
 
 ## ✅ 완료 조건 체크리스트
 
+### Public WebSocket (기 구현 완료)
+
 ```
-□ WebSocketClientBase 공통 클래스 구현
-□ 업비트 WebSocket (UpbitWebSocket)
-  □ 시세 구독 (ticker)
-  □ 호가 구독 (orderbook)
-  □ 메시지 파싱
-□ 바이낸스 WebSocket (BinanceWebSocket)
-  □ 시세 구독
-  □ 호가 구독
-  □ Combined Stream 지원
-□ 빗썸 WebSocket (BithumbWebSocket)
-  □ 시세 구독
-  □ 호가 구독
-□ MEXC WebSocket (MEXCWebSocket)
-  □ 시세 구독
-  □ 호가 구독
-□ 공통 기능
-  □ SSL/TLS 연결
-  □ 자동 재연결 (지수 백오프)
-  □ PING/PONG 처리
-  □ Lock-Free Queue 이벤트 전달
-  □ 통계 수집
-□ 통합 테스트 (4개 거래소 동시 연결)
+[x] WebSocketClientBase 공통 클래스 구현
+[x] 업비트 WebSocket (UpbitWebSocket)
+  [x] 시세 구독 (ticker)
+  [x] 호가 구독 (orderbook)
+  [x] 메시지 파싱
+[x] 바이낸스 WebSocket (BinanceWebSocket)
+  [x] 시세 구독
+  [x] 호가 구독
+  [x] Combined Stream 지원
+[x] 빗썸 WebSocket (BithumbWebSocket)
+  [x] 시세 구독
+  [x] 호가 구독
+[x] MEXC WebSocket (MEXCWebSocket)
+  [x] 시세 구독
+  [x] 호가 구독
+[x] 공통 기능
+  [x] SSL/TLS 연결
+  [x] 자동 재연결 (지수 백오프)
+  [x] PING/PONG 처리
+  [x] Lock-Free Queue 이벤트 전달
+  [x] 통계 수집
+[x] 통합 테스트 (4개 거래소 동시 연결)
+```
+
+### Private WebSocket (미구현)
+
+```
+[ ] PrivateWebSocketBase 공통 클래스 구현
+  [ ] 인증 인터페이스 (JWT 헤더 / WS 메시지 / listenKey)
+  [ ] OrderUpdate 공통 구조체 변환
+  [ ] SPSC Queue로 OrderManager에 전달
+[ ] 업비트 Private WS
+  [ ] JWT (HS512) 인증 + 핸드셰이크 헤더
+  [ ] myOrder 구독 + 파싱
+  [ ] myAsset 구독 + 파싱
+[ ] 빗썸 Private WS
+  [ ] JWT (HS256) 인증 + 핸드셰이크 헤더
+  [ ] myOrder 구독 + 파싱
+  [ ] myAsset 구독 + 파싱
+[ ] 바이낸스 Private WS
+  [ ] userDataStream.subscribe.signature (HMAC-SHA256)
+  [ ] executionReport 파싱
+  [ ] outboundAccountPosition 파싱
+[ ] MEXC Private WS
+  [ ] listenKey 발급/갱신/종료 (REST)
+  [ ] Protobuf 디시리얼라이제이션 (protoc 코드 생성)
+  [ ] spot@private.orders.v3.api 파싱
+  [ ] spot@private.account.v3.api 파싱
+[ ] 공통 기능
+  [ ] 자동 재연결 + 재인증
+  [ ] Keep-alive (Ping/listenKey 갱신)
+  [ ] OrderUpdate → SPSC Queue 전달
+[ ] 테스트
 ```
 
 ---

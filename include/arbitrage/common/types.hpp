@@ -342,6 +342,63 @@ struct alignas(CACHE_LINE_SIZE) Balance {
 };
 static_assert(sizeof(Balance) == 64, "Balance must be exactly 64 bytes");
 
+// =============================================================================
+// 주문 업데이트 (Private WebSocket 수신용, Cache-line aligned)
+// =============================================================================
+constexpr size_t MAX_ORDER_TRACKER_ENTRIES = 64;
+
+struct alignas(CACHE_LINE_SIZE) OrderUpdate {
+    Exchange exchange;                        // 1 byte
+    OrderSide side;                           // 1 byte
+    OrderStatus status;                       // 1 byte
+    bool is_maker{false};                     // 1 byte
+    uint8_t _pad1[4]{};                       // 4 bytes padding
+    char order_id[MAX_ORDER_ID_LEN]{};        // 48 bytes (거래소 발급 ID)
+    char client_order_id[MAX_ORDER_ID_LEN]{}; // 48 bytes (★ 핵심 매칭 키)
+    double filled_qty{0.0};                   // 8 bytes (누적 체결 수량)
+    double remaining_qty{0.0};                // 8 bytes
+    double avg_price{0.0};                    // 8 bytes
+    double last_fill_price{0.0};              // 8 bytes
+    double last_fill_qty{0.0};                // 8 bytes
+    double commission{0.0};                   // 8 bytes
+    int64_t timestamp_ms{0};                  // 8 bytes
+    // Total: 168 bytes -> padded to 192 bytes (3 cache lines)
+
+    void set_order_id(const char* id) {
+        std::strncpy(order_id, id, MAX_ORDER_ID_LEN - 1);
+        order_id[MAX_ORDER_ID_LEN - 1] = '\0';
+    }
+
+    void set_order_id(std::string_view id) {
+        size_t len = std::min(id.size(), MAX_ORDER_ID_LEN - 1);
+        std::memcpy(order_id, id.data(), len);
+        order_id[len] = '\0';
+    }
+
+    void set_client_order_id(const char* id) {
+        std::strncpy(client_order_id, id, MAX_ORDER_ID_LEN - 1);
+        client_order_id[MAX_ORDER_ID_LEN - 1] = '\0';
+    }
+
+    void set_client_order_id(std::string_view id) {
+        size_t len = std::min(id.size(), MAX_ORDER_ID_LEN - 1);
+        std::memcpy(client_order_id, id.data(), len);
+        client_order_id[len] = '\0';
+    }
+
+    bool is_terminal() const {
+        return status == OrderStatus::Filled ||
+               status == OrderStatus::Canceled ||
+               status == OrderStatus::Failed;
+    }
+
+    bool has_client_order_id() const {
+        return client_order_id[0] != '\0';
+    }
+};
+static_assert(std::is_trivially_copyable_v<OrderUpdate>,
+              "OrderUpdate must be trivially copyable for SHM/SPSC");
+
 // 시간 타입 별칭
 using Duration = std::chrono::microseconds;
 using TimePoint = std::chrono::system_clock::time_point;

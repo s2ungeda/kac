@@ -19,6 +19,7 @@ add_library(common
 add_library(exchange_websocket
     exchange/websocket_base.cpp
     exchange/upbit/websocket.cpp
+    exchange/upbit/private_websocket.cpp
     exchange/binance/websocket.cpp
     exchange/bithumb/websocket.cpp
     exchange/mexc/websocket.cpp
@@ -51,6 +52,7 @@ add_library(executor
     executor/dual_order.cpp
     executor/recovery.cpp
     executor/transfer.cpp
+    executor/order_tracker.cpp
 )
 
 # Infra 라이브러리 (TASK_19, TASK_21, TASK_22, TASK_23, TASK_26)

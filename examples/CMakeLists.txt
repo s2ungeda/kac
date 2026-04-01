@@ -155,6 +155,16 @@ target_link_libraries(executor_test
         Threads::Threads
 )
 
+# OrderTracker Test
+add_executable(order_tracker_test order_tracker_test.cpp)
+
+target_link_libraries(order_tracker_test
+    PRIVATE
+        common
+        executor
+        Threads::Threads
+)
+
 # CURL 링크
 if(CURL_FOUND)
     target_link_libraries(executor_test PRIVATE ${CURL_LIBRARIES})
