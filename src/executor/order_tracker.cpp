@@ -257,23 +257,85 @@ void OrderTracker::check_completion(DualOrderTrack& track) {
     }
 }
 
+void OrderTracker::check_timeouts(int64_t ws_timeout_ms) {
+    // 콜백은 lock 밖에서 호출 (콜백이 on_order_update 등으로 재진입 가능)
+    // 한 번에 최대 16건 — 초과분은 다음 호출에서 처리 (escalated 플래그 미설정)
+    constexpr size_t MAX_ESCALATIONS_PER_CALL = 16;
+    TrackedOrder escalated[MAX_ESCALATIONS_PER_CALL];
+    size_t escalated_count = 0;
+
+    {
+        SpinLockGuard guard(lock_);
+        int64_t now = now_ms();
+
+        for (size_t i = 0; i < MAX_ORDER_TRACKER_ENTRIES * 2 &&
+                           escalated_count < MAX_ESCALATIONS_PER_CALL; ++i) {
+            auto& order = orders_[i];
+            if (!order.active || order.timeout_escalated) continue;
+            if (order.ws_received && order.last_update.is_terminal()) continue;
+            if ((now - order.created_at_ms) <= ws_timeout_ms) continue;
+
+            order.timeout_escalated = true;
+            escalated[escalated_count++] = order;
+
+            logger_->warn("WS update timeout ({}ms): {} — escalating to REST fallback",
+                          ws_timeout_ms, order.last_update.client_order_id);
+        }
+    }
+
+    if (on_timeout_) {
+        for (size_t i = 0; i < escalated_count; ++i) {
+            on_timeout_(escalated[i]);
+        }
+    }
+}
+
 void OrderTracker::cleanup_stale(int64_t max_age_ms) {
     SpinLockGuard guard(lock_);
     int64_t now = now_ms();
 
+    // dual과 양쪽 레그를 함께 해제 (dangling index 방지)
+    auto release_dual = [this](DualOrderTrack& dual) {
+        if (dual.buy_idx >= 0) orders_[dual.buy_idx].reset();
+        if (dual.sell_idx >= 0) orders_[dual.sell_idx].reset();
+        dual.reset();
+    };
+
+    auto is_stale = [&](int idx) {
+        return idx >= 0 && orders_[idx].active &&
+               (now - orders_[idx].created_at_ms) > max_age_ms;
+    };
+
     for (size_t i = 0; i < MAX_ORDER_TRACKER_ENTRIES; ++i) {
-        if (duals_[i].active && duals_[i].completed) {
-            // completed된 건 정리
-            if (duals_[i].buy_idx >= 0) orders_[duals_[i].buy_idx].reset();
-            if (duals_[i].sell_idx >= 0) orders_[duals_[i].sell_idx].reset();
-            duals_[i].reset();
+        auto& dual = duals_[i];
+        if (!dual.active) continue;
+
+        if (dual.completed) {
+            // 완료된 건 정리
+            release_dual(dual);
+        } else if (is_stale(dual.buy_idx) || is_stale(dual.sell_idx)) {
+            // 미완료인데 오래된 건 — 헤징 상태 불명이므로 경고 후 정리
+            logger_->warn("Stale incomplete dual order cleanup: request_id={} "
+                          "(hedge state unknown, verify positions manually)",
+                          dual.request_id);
+            release_dual(dual);
         }
     }
 
-    // 오래된 미완료 주문도 정리
+    // dual에 연결되지 않은 고아 주문 정리
     for (size_t i = 0; i < MAX_ORDER_TRACKER_ENTRIES * 2; ++i) {
         if (orders_[i].active && (now - orders_[i].created_at_ms) > max_age_ms) {
-            logger_->warn("Stale order cleanup: {}", orders_[i].last_update.client_order_id);
+            logger_->warn("Stale orphan order cleanup: {}",
+                          orders_[i].last_update.client_order_id);
+            // 혹시 남은 dual 참조가 있으면 함께 해제
+            for (size_t d = 0; d < MAX_ORDER_TRACKER_ENTRIES; ++d) {
+                if (duals_[d].active &&
+                    (duals_[d].buy_idx == static_cast<int>(i) ||
+                     duals_[d].sell_idx == static_cast<int>(i))) {
+                    release_dual(duals_[d]);
+                    break;
+                }
+            }
             orders_[i].reset();
         }
     }

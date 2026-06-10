@@ -1,7 +1,15 @@
 #include "arbitrage/strategy/premium_calc.hpp"
+#include <chrono>
 #include <limits>
 
 namespace arbitrage {
+
+namespace {
+int64_t steady_now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+}
 
 PremiumCalculator::PremiumCalculator()
     : logger_(Logger::create("premium"))
@@ -23,7 +31,27 @@ void PremiumCalculator::update_price(Exchange ex, double price) {
 
 void PremiumCalculator::update_fx_rate(double rate) {
     fx_rate_.store(rate);
+    fx_updated_at_ms_.store(steady_now_ms(), std::memory_order_release);
     recalculate();
+}
+
+bool PremiumCalculator::is_fx_stale() const {
+    int64_t updated = fx_updated_at_ms_.load(std::memory_order_acquire);
+    if (updated == 0) return true;  // 첫 갱신 전 — 기본값으로 거래 금지
+    return (steady_now_ms() - updated) > fx_max_age_ms_.load();
+}
+
+void PremiumCalculator::warn_fx_stale() const {
+    // 10초에 한 번만 경고 (hot path 호출 빈도 보호)
+    int64_t now = steady_now_ms();
+    int64_t last = last_stale_warn_ms_.load(std::memory_order_relaxed);
+    if (now - last > 10000 &&
+        last_stale_warn_ms_.compare_exchange_strong(last, now,
+                                                    std::memory_order_relaxed)) {
+        int64_t updated = fx_updated_at_ms_.load(std::memory_order_acquire);
+        logger_->warn("FX rate stale ({}s old) — blocking opportunities",
+                      updated == 0 ? -1 : (now - updated) / 1000);
+    }
 }
 
 double PremiumCalculator::to_krw(Exchange ex, double price) const {
@@ -113,6 +141,11 @@ PremiumMatrix PremiumCalculator::get_matrix() const {
 }
 
 std::optional<PremiumInfo> PremiumCalculator::get_best_opportunity() const {
+    if (is_fx_stale()) {
+        warn_fx_stale();
+        return std::nullopt;
+    }
+
     ReadGuard lock(mutex_);
     
     double best_premium = std::numeric_limits<double>::lowest();
@@ -148,6 +181,11 @@ std::optional<PremiumInfo> PremiumCalculator::get_best_opportunity() const {
 }
 
 std::vector<PremiumInfo> PremiumCalculator::get_opportunities(double min_premium_pct) const {
+    if (is_fx_stale()) {
+        warn_fx_stale();
+        return {};
+    }
+
     ReadGuard lock(mutex_);
     
     std::vector<PremiumInfo> results;

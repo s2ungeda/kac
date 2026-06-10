@@ -99,6 +99,17 @@ Result<OrderResult> BinanceOrderClient::place_order(const OrderRequest& req) {
 
     auto resp = make_request(HttpMethod::POST, "/api/v3/order", params.str());
 
+    // 멱등성 처리: 네트워크 오류/타임아웃/5xx는 "주문 접수 여부 불명" 상태.
+    // newClientOrderId가 있으면 조회로 실제 접수 여부를 확인해 중복 주문을 방지한다.
+    const bool ambiguous = !resp || resp.value().status_code >= 500;
+    if (ambiguous && req.client_order_id[0] != '\0') {
+        auto existing = get_order_by_identifier(req.client_order_id);
+        if (existing) {
+            // 주문이 이미 접수돼 있었음 — 기존 주문 상태 반환 (재주문 금지)
+            return existing;
+        }
+    }
+
     if (!resp) {
         return Err<OrderResult>(resp.error());
     }
@@ -110,21 +121,43 @@ Result<OrderResult> BinanceOrderClient::place_order(const OrderRequest& req) {
         );
     }
 
+    return parse_order_response(resp.value().body);
+}
+
+Result<OrderResult> BinanceOrderClient::parse_order_response(const std::string& body) {
     try {
-        auto json = nlohmann::json::parse(resp.value().body);
+        auto json = nlohmann::json::parse(body);
 
         OrderResult result;
-        result.set_order_id(std::to_string(json["orderId"].get<long>()).c_str());
+        result.set_order_id(std::to_string(json["orderId"].get<long long>()).c_str());
 
-        std::string status = json["status"];
+        std::string status = json.value("status", "");
         if (status == "NEW") {
             result.status = OrderStatus::Open;
         } else if (status == "FILLED") {
             result.status = OrderStatus::Filled;
         } else if (status == "PARTIALLY_FILLED") {
             result.status = OrderStatus::PartiallyFilled;
+        } else if (status == "CANCELED" || status == "EXPIRED") {
+            result.status = OrderStatus::Canceled;
+        } else if (status == "REJECTED") {
+            result.status = OrderStatus::Failed;
+        } else {
+            result.status = OrderStatus::Pending;
         }
 
+        // 체결 정보 (recovery의 수량 기반 판정에 필수)
+        if (json.contains("executedQty")) {
+            result.filled_qty = std::stod(json["executedQty"].get<std::string>());
+        }
+        if (json.contains("cummulativeQuoteQty") && result.filled_qty > 0.0) {
+            double quote = std::stod(json["cummulativeQuoteQty"].get<std::string>());
+            if (quote > 0.0) {
+                result.avg_price = quote / result.filled_qty;
+            }
+        }
+
+        result.timestamp_us = get_timestamp_us();
         return Ok(std::move(result));
 
     } catch (const std::exception& e) {
@@ -155,18 +188,25 @@ Result<OrderResult> BinanceOrderClient::cancel_order(const std::string& order_id
         );
     }
 
-    return Err<OrderResult>(
-        ErrorCode::NotImplemented,
-        "Response parsing not implemented"
-    );
+    return parse_order_response(resp.value().body);
 }
 
 Result<OrderResult> BinanceOrderClient::get_order(const std::string& order_id) {
     std::ostringstream params;
     params << "symbol=" << format_symbol("XRP");
     params << "&orderId=" << order_id;
+    return fetch_order(params.str());
+}
 
-    auto resp = make_request(HttpMethod::GET, "/api/v3/order", params.str());
+Result<OrderResult> BinanceOrderClient::get_order_by_identifier(const std::string& identifier) {
+    std::ostringstream params;
+    params << "symbol=" << format_symbol("XRP");
+    params << "&origClientOrderId=" << identifier;
+    return fetch_order(params.str());
+}
+
+Result<OrderResult> BinanceOrderClient::fetch_order(const std::string& params) {
+    auto resp = make_request(HttpMethod::GET, "/api/v3/order", params);
 
     if (!resp) {
         return Err<OrderResult>(resp.error());
@@ -179,10 +219,7 @@ Result<OrderResult> BinanceOrderClient::get_order(const std::string& order_id) {
         );
     }
 
-    return Err<OrderResult>(
-        ErrorCode::NotImplemented,
-        "Response parsing not implemented"
-    );
+    return parse_order_response(resp.value().body);
 }
 
 Result<Balance> BinanceOrderClient::get_balance(const std::string& currency) {

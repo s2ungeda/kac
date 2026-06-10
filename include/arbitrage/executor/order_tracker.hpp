@@ -19,6 +19,7 @@ struct TrackedOrder {
     bool registered{false};                 // register_order() 호출됨
     bool ws_received{false};                // Private WS 업데이트 수신됨
     bool active{false};                     // 이 슬롯 사용 중
+    bool timeout_escalated{false};          // 타임아웃 콜백 발화됨 (중복 방지)
     int64_t created_at_ms{0};               // 추적 시작 시각
 
     void reset() {
@@ -28,6 +29,7 @@ struct TrackedOrder {
         registered = false;
         ws_received = false;
         active = false;
+        timeout_escalated = false;
         created_at_ms = 0;
     }
 };
@@ -67,11 +69,20 @@ public:
         const TrackedOrder& buy,
         const TrackedOrder& sell)>;
 
+    // WS 업데이트 타임아웃 콜백 (REST 폴백 트리거)
+    // 소유자는 거래소 REST API로 주문을 조회한 뒤, 그 결과로 OrderUpdate를
+    // 합성하여 on_order_update()를 호출해 추적을 완료시켜야 한다.
+    using TimeoutCallback = std::function<void(const TrackedOrder& order)>;
+
     explicit OrderTracker(CompletionCallback on_complete = nullptr);
 
     // 콜백 설정
     void set_completion_callback(CompletionCallback cb) {
         on_complete_ = std::move(cb);
+    }
+
+    void set_timeout_callback(TimeoutCallback cb) {
+        on_timeout_ = std::move(cb);
     }
 
     // DualOrderExecutor에서 호출 — 주문 제출 시 추적 등록
@@ -82,6 +93,11 @@ public:
     // Private WebSocket에서 호출 — 체결/취소 이벤트 수신
     // client_order_id로 매칭하여 상태 업데이트
     void on_order_update(const OrderUpdate& update);
+
+    // WS 업데이트 타임아웃 점검 (주기적 호출)
+    // 등록 후 ws_timeout_ms 동안 terminal 상태에 도달하지 못한 주문에 대해
+    // TimeoutCallback을 1회 발화한다 (Private WS 끊김 → 영구 미완료 방지).
+    void check_timeouts(int64_t ws_timeout_ms = 5000);
 
     // 만료된 엔트리 정리 (주기적 호출)
     void cleanup_stale(int64_t max_age_ms = 300000);  // 5분
@@ -118,6 +134,7 @@ private:
     DualOrderTrack duals_[MAX_ORDER_TRACKER_ENTRIES]{};
 
     CompletionCallback on_complete_;
+    TimeoutCallback on_timeout_;
     mutable SpinLock lock_;
     std::shared_ptr<SimpleLogger> logger_;
 };

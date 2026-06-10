@@ -219,8 +219,10 @@ Result<FXRate> FXRateService::fetch() {
             auto age = std::chrono::duration_cast<std::chrono::seconds>(
                 rate.timestamp - cached_rate_.timestamp).count();
 
-            // 5분 이내의 캐시는 사용 가능
-            if (age < 300) {
+            // 60초(갱신 주기 30초의 2배) 이내의 캐시만 허용.
+            // 그 이상은 실패로 처리해 PremiumCalculator의 FX 스테일 게이트가
+            // 거래를 차단하도록 한다 (오래된 환율로 김프 오판 방지).
+            if (age < 60) {
                 logger_->warn("Using cached rate ({} seconds old)", age);
                 FXRate cached_copy = cached_rate_;
                 cached_copy.source = cached_copy.source + " (cached)";

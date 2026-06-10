@@ -18,11 +18,17 @@ namespace arbitrage {
 // =============================================================================
 // 부분 체결 시 자동 복구 로직 담당
 //
+// 판정 기준: 성공/실패 플래그가 아닌 양쪽 레그의 "실제 체결 수량" 차이.
+// 양쪽 모두 부분 체결된 헤징 불일치(예: 매수 50 / 매도 40)도 잡아낸다.
+//
 // 복구 시나리오:
-// 1. 해외 매수 성공 + 국내 매도 실패 → 해외에서 손절 매도 (SellBought)
-// 2. 해외 매수 실패 + 국내 매도 성공 → 국내에서 매수 복구 (BuySold)
-// 3. 둘 다 실패 → 복구 불필요 (None)
-// 4. 복잡한 상황 → 수동 개입 (ManualIntervention)
+// 1. 매수 체결 > 매도 체결 → 초과분을 매수 거래소에서 손절 매도 (SellBought)
+// 2. 매도 체결 > 매수 체결 → 부족분을 매도 거래소에서 재매수 (BuySold)
+// 3. 체결량 일치 (전량/전무) → 복구 불필요 (None)
+//
+// 주의: REST 호출이 타임아웃 등으로 실패하면 실제 체결량을 알 수 없다.
+// 이 경우 filled_qty=0으로 보고되므로, 호출측에서 주문 조회(멱등성 확인)
+// 후 정확한 체결량으로 DualOrderResult를 갱신한 뒤 create_plan을 불러야 한다.
 // =============================================================================
 class RecoveryManager {
 public:
@@ -131,15 +137,17 @@ public:
     void reset_stats() { stats_.reset(); }
 
 private:
-    // 복구 계획 생성 헬퍼
+    // 복구 계획 생성 헬퍼 (quantity = 복구할 수량)
     RecoveryPlan create_sell_bought_plan(
         const DualOrderRequest& request,
-        const DualOrderResult& result
+        double quantity,
+        const std::string& reason
     );
 
     RecoveryPlan create_buy_sold_plan(
         const DualOrderRequest& request,
-        const DualOrderResult& result
+        double quantity,
+        const std::string& reason
     );
 
     // 복구 주문 실행

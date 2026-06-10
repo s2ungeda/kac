@@ -1,5 +1,6 @@
 #include "arbitrage/executor/dual_order.hpp"
 #include "arbitrage/executor/recovery.hpp"
+#include <cstdio>
 #include <thread>
 #include <iostream>
 
@@ -31,7 +32,28 @@ DualOrderExecutor::~DualOrderExecutor() {
 // 주문 실행
 // =============================================================================
 
-DualOrderResult DualOrderExecutor::execute_sync(const DualOrderRequest& request) {
+DualOrderResult DualOrderExecutor::execute_sync(const DualOrderRequest& original_request) {
+    // client_order_id 자동 생성을 위해 로컬 복사본 사용
+    DualOrderRequest request = original_request;
+    if (request.request_id == 0) {
+        request.set_request_id_auto();
+    }
+
+    // client_order_id 부여: "arb_{request_id}_{buy|sell}"
+    // - 거래소 멱등성 키 (타임아웃 시 중복 주문 방지)
+    // - OrderTracker의 Private WS 매칭 키
+    char id_buf[MAX_ORDER_ID_LEN];
+    if (request.buy_order.client_order_id[0] == '\0') {
+        std::snprintf(id_buf, sizeof(id_buf), "arb_%lld_buy",
+                      static_cast<long long>(request.request_id));
+        request.buy_order.set_client_order_id(id_buf);
+    }
+    if (request.sell_order.client_order_id[0] == '\0') {
+        std::snprintf(id_buf, sizeof(id_buf), "arb_%lld_sell",
+                      static_cast<long long>(request.request_id));
+        request.sell_order.set_client_order_id(id_buf);
+    }
+
     DualOrderResult result;
     result.request_id = request.request_id;
     result.start_time = std::chrono::steady_clock::now();
@@ -90,8 +112,9 @@ DualOrderResult DualOrderExecutor::execute_sync(const DualOrderRequest& request)
     // 통계 기록
     stats_.record_result(result);
 
-    // 부분 체결 시 자동 복구
-    if (result.partial_fill() && auto_recovery_ && recovery_) {
+    // 자동 복구: 체결 수량 불일치 검사는 RecoveryManager::create_plan이
+    // 수량 기반으로 수행 (양쪽 부분 체결 미스매치 포함). 균형이면 None 반환.
+    if (auto_recovery_ && recovery_) {
         handle_recovery(request, result);
     }
 

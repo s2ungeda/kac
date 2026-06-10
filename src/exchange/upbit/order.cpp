@@ -110,6 +110,18 @@ Result<OrderResult> UpbitOrderClient::place_order(const OrderRequest& req) {
 
     auto resp = make_request(HttpMethod::POST, "/v1/orders", params.str());
 
+    // 멱등성 처리: 네트워크 오류/타임아웃/5xx는 "주문 접수 여부 불명" 상태.
+    // identifier가 있으면 조회로 실제 접수 여부를 확인해 중복 주문을 방지한다.
+    const bool ambiguous = !resp || resp.value().status_code >= 500;
+    if (ambiguous && req.client_order_id[0] != '\0') {
+        auto existing = get_order_by_identifier(req.client_order_id);
+        if (existing) {
+            // 주문이 이미 접수돼 있었음 — 기존 주문 상태 반환 (재주문 금지)
+            return existing;
+        }
+        // 조회 실패/미존재 → 아래의 원래 오류 처리로 진행
+    }
+
     if (!resp) {
         return Err<OrderResult>(resp.error());
     }
@@ -196,7 +208,14 @@ Result<OrderResult> UpbitOrderClient::cancel_order(const std::string& order_id) 
 }
 
 Result<OrderResult> UpbitOrderClient::get_order(const std::string& order_id) {
-    std::string params = "uuid=" + order_id;
+    return fetch_order("uuid=" + order_id);
+}
+
+Result<OrderResult> UpbitOrderClient::get_order_by_identifier(const std::string& identifier) {
+    return fetch_order("identifier=" + identifier);
+}
+
+Result<OrderResult> UpbitOrderClient::fetch_order(const std::string& params) {
     auto resp = make_request(HttpMethod::GET, "/v1/order", params);
 
     if (!resp) {

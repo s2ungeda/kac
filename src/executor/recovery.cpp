@@ -1,4 +1,6 @@
 #include "arbitrage/executor/recovery.hpp"
+#include <cmath>
+#include <cstdio>
 #include <thread>
 #include <iostream>
 
@@ -27,55 +29,63 @@ RecoveryPlan RecoveryManager::create_plan(
 {
     ++stats_.total_plans;
 
-    bool buy_ok = result.buy_result.is_success();
-    bool sell_ok = result.sell_result.is_success();
+    // 성공/실패 플래그가 아닌 "실제 체결 수량" 기준으로 판정한다.
+    // 부분 체결(양쪽 모두 부분 체결 포함)도 헤징 불일치로 잡아낸다.
+    const double bought = result.buy_result.filled_qty();
+    const double sold   = result.sell_result.filled_qty();
+    const double imbalance = bought - sold;  // >0: 매수 초과, <0: 매도 초과
 
-    // 둘 다 성공 → 복구 불필요
-    if (buy_ok && sell_ok) {
-        return RecoveryPlan{RecoveryAction::None, {}, "Both orders succeeded"};
-    }
+    // 부동소수점 dust 허용 오차
+    constexpr double DUST_EPS = 1e-8;
 
-    // 둘 다 실패 → 복구 불필요
-    if (!buy_ok && !sell_ok) {
+    if (std::abs(imbalance) <= DUST_EPS) {
+        // 체결량 일치 (둘 다 전량 체결 또는 둘 다 미체결) → 복구 불필요
+        if (bought > DUST_EPS) {
+            return RecoveryPlan{RecoveryAction::None, {},
+                               "Both legs filled equally, hedged"};
+        }
         return RecoveryPlan{RecoveryAction::None, {},
-                           "Both orders failed, no recovery needed"};
+                           "No fills on either leg, no recovery needed"};
     }
 
-    // 매수 성공, 매도 실패 → 손절 매도
-    if (buy_ok && !sell_ok) {
+    char reason[160];
+    if (imbalance > 0) {
+        // 매수 체결 > 매도 체결 → 초과 매수분을 매수 거래소에서 손절 매도
         ++stats_.sell_bought_plans;
-        return create_sell_bought_plan(request, result);
+        std::snprintf(reason, sizeof(reason),
+                      "Hedge imbalance: bought %.8f > sold %.8f, "
+                      "liquidating excess %.8f on buy exchange",
+                      bought, sold, imbalance);
+        return create_sell_bought_plan(request, imbalance, reason);
     }
 
-    // 매수 실패, 매도 성공 → 매수 복구
-    if (!buy_ok && sell_ok) {
-        ++stats_.buy_sold_plans;
-        return create_buy_sold_plan(request, result);
-    }
-
-    // 그 외 (이론적으로 도달 불가)
-    ++stats_.manual_plans;
-    return RecoveryPlan{RecoveryAction::ManualIntervention, {},
-                       "Unexpected state, manual intervention required"};
+    // 매도 체결 > 매수 체결 → 부족분을 매도 거래소에서 재매수
+    ++stats_.buy_sold_plans;
+    std::snprintf(reason, sizeof(reason),
+                  "Hedge imbalance: sold %.8f > bought %.8f, "
+                  "covering excess %.8f on sell exchange",
+                  sold, bought, -imbalance);
+    return create_buy_sold_plan(request, -imbalance, reason);
 }
 
 RecoveryPlan RecoveryManager::create_sell_bought_plan(
     const DualOrderRequest& request,
-    const DualOrderResult& result)
+    double quantity,
+    const std::string& reason)
 {
     RecoveryPlan plan;
     plan.action = RecoveryAction::SellBought;
-    plan.reason = "Buy succeeded but Sell failed, liquidating bought position";
+    plan.reason = reason;
     plan.max_retries = max_retries_;
     plan.retry_delay = retry_delay_;
 
-    // 매수한 거래소에서 손절 매도
+    // 매수한 거래소에서 초과분 손절 매도
     // 시장가 주문으로 즉시 청산
     plan.recovery_order.exchange = request.buy_order.exchange;
     plan.recovery_order.set_symbol(request.buy_order.symbol);
     plan.recovery_order.side = OrderSide::Sell;
     plan.recovery_order.type = OrderType::Market;
-    plan.recovery_order.quantity = result.buy_result.filled_qty();
+    plan.recovery_order.quantity = quantity;
     plan.recovery_order.price = 0.0;  // Market order
 
     return plan;
@@ -83,21 +93,22 @@ RecoveryPlan RecoveryManager::create_sell_bought_plan(
 
 RecoveryPlan RecoveryManager::create_buy_sold_plan(
     const DualOrderRequest& request,
-    const DualOrderResult& result)
+    double quantity,
+    const std::string& reason)
 {
     RecoveryPlan plan;
     plan.action = RecoveryAction::BuySold;
-    plan.reason = "Sell succeeded but Buy failed, covering sold position";
+    plan.reason = reason;
     plan.max_retries = max_retries_;
     plan.retry_delay = retry_delay_;
 
-    // 매도한 거래소에서 매수 복구
+    // 매도한 거래소에서 부족분 재매수
     // 시장가 주문으로 즉시 포지션 커버
     plan.recovery_order.exchange = request.sell_order.exchange;
     plan.recovery_order.set_symbol(request.sell_order.symbol);
     plan.recovery_order.side = OrderSide::Buy;
     plan.recovery_order.type = OrderType::Market;
-    plan.recovery_order.quantity = result.sell_result.filled_qty();
+    plan.recovery_order.quantity = quantity;
     plan.recovery_order.price = 0.0;  // Market order
 
     return plan;

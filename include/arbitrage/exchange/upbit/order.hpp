@@ -15,6 +15,11 @@ public:
     Result<OrderResult> cancel_order(const std::string& order_id) override;
     Result<OrderResult> get_order(const std::string& order_id) override;
     Result<Balance> get_balance(const std::string& currency) override;
+
+    // client_order_id(identifier)로 주문 조회 — 멱등성 확인용
+    // place_order가 네트워크 오류/5xx로 실패해 접수 여부가 불명일 때,
+    // 재주문 전에 이 메서드로 기존 주문 존재 여부를 확인한다.
+    Result<OrderResult> get_order_by_identifier(const std::string& identifier);
     
     Exchange exchange() const override { return Exchange::Upbit; }
     std::string name() const override { return "Upbit"; }
@@ -33,6 +38,9 @@ private:
     
     // 심볼 변환 (XRP -> KRW-XRP)
     std::string format_symbol(const char* symbol) const;
+
+    // GET /v1/order 공통 처리 (uuid= 또는 identifier= 파라미터)
+    Result<OrderResult> fetch_order(const std::string& params);
     
     // RuntimeKeyStore 키 이름 (암호화 상태, 평문 아님)
     std::string key_name_;

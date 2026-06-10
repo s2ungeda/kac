@@ -52,16 +52,47 @@
 
 ---
 
-## 🔴 미해결 — 실거래 전 필수 (Priority 2)
+## ✅ 2차 수정 완료 (Priority 2, 2026-06-10)
+
+### 4. 레그 리스크: 수량 기반 복구 판정 (높음 → 해결)
+- **문제**: 성공/실패 boolean으로만 판정 → 양쪽 모두 부분 체결 시(매수 50/매도 40) "둘 다 성공"으로 헤징 미스매치 방치
+- **수정** (`src/executor/recovery.cpp`):
+  - `create_plan`을 **체결 수량 차이(imbalance) 기반**으로 재작성
+  - 매수 초과분 → 매수 거래소에서 손절 매도, 매도 초과분 → 매도 거래소에서 재매수
+  - `dual_order.cpp`: 복구 트리거를 `partial_fill()`(한쪽만 성공)에서 **모든 결과**로 확장 (균형이면 create_plan이 None 반환)
+
+### 5. OrderTracker 타임아웃 에스컬레이션 (높음 → 해결)
+- **문제**: 완료 판정이 `ws_received && is_terminal()` — Private WS 끊기면 영구 미완료
+- **수정** (`src/executor/order_tracker.cpp`):
+  - `check_timeouts(ms)` 추가: 등록 후 일정 시간 내 terminal 미도달 주문에 `TimeoutCallback` 1회 발화 (소유자가 REST 조회 → `on_order_update()`로 회신)
+  - **추가 버그 수정**: `cleanup_stale`이 주문 슬롯만 reset하고 dual이 인덱스를 계속 참조 → 슬롯 재할당 시 잘못된 완료 콜백 가능 → dual과 레그를 함께 해제하도록 수정
+
+### 6. FX 스테일 거래 차단 (치명 → 해결)
+- **문제**: 크롤러 실패 시 5분 묵은 환율로 거래 판단 (±2% 오차 가능)
+- **수정**:
+  - `PremiumCalculator`에 FX 스테일 게이트: 마지막 `update_fx_rate` 후 120초(설정 가능) 초과 또는 최초 갱신 전이면 `get_best_opportunity`/`get_opportunities`가 기회 반환 안 함 (**fail-closed**)
+  - `fxrate.cpp` 캐시 폴백 5분 → 60초 (갱신 주기 30초의 2배)로 단축
+  - 경고 로그 10초 rate limit (hot path 보호)
+
+### 7. 주문 멱등성 (높음 → 해결)
+- **문제**: place_order 타임아웃 시 접수 여부 불명 → 재시도하면 중복 주문
+- **수정**:
+  - `DualOrderExecutor::execute_sync`: client_order_id 자동 생성 (`arb_{request_id}_{buy|sell}`) — 멱등성 키 + OrderTracker 매칭 키 (기존엔 아무도 생성하지 않아 OrderTracker 매칭 자체가 불가능했음)
+  - Upbit: 네트워크 오류/5xx 시 `identifier`로 주문 조회 → 존재하면 기존 주문 반환 (재주문 금지). `get_order_by_identifier()` 추가
+  - Binance: 동일 패턴 (`origClientOrderId` 조회). **추가**: 미구현이던 get/cancel 응답 파싱 구현 (`executedQty`/`cummulativeQuoteQty` → filled_qty/avg_price — recovery 수량 판정에 필수)
+
+### 검증 (2차)
+- 전체 빌드 성공, `executor_test` 9/9, `order_tracker_test` 15/15, ctest 3/3 통과
+
+---
+
+## 🔴 미해결 — 실거래 전 필수 (Priority 2 잔여)
 
 | # | 이슈 | 위치 | 내용 |
 |---|------|------|------|
-| 1 | 레그 리스크: 부분 체결 처리 누락 | `src/executor/recovery.cpp:24-59` | 양쪽 모두 부분 체결 시(매수 50/매도 40) 둘 다 성공 판정 → 헤징 미스매치 방치. 매수 부분체결+매도 실패 시 체결분만 손절하고 잔여 미추적 |
-| 2 | OrderTracker 영구 미완료 | `src/executor/order_tracker.cpp:227-258` | 완료 판정이 `ws_received && is_terminal()` — Private WS 끊기면 영원히 미완료. REST 폴링 폴백/타임아웃 필요 |
-| 3 | FX 환율 스테일 캐시 5분 | `src/common/fxrate.cpp:223` | 크롤러 실패 시 5분 묵은 환율 사용. 김프 마진(1~2%) 대비 위험 → 스테일 시 거래 차단으로 변경 권장 |
-| 4 | 주문 멱등성 부재 | `src/exchange/upbit/order.cpp:86-154` | 타임아웃 후 재시도 시 중복 주문 위험. `client_order_id` 기반 "조회 후 재시도" 패턴 필요 |
 | 5 | 재연결 중 스테일 호가 | `src/exchange/websocket_base.cpp:334` | 재연결 동안 SHM의 옛 호가로 엔진이 판단 가능. 호가 age 체크 필요 |
 | 6 | OrderManager 크래시 복구 | `src/cold/order_manager_main.cpp:53-116` | 주문 실행 중 사망 시 in-flight 주문 정합성 복구 경로 없음. 재시작 시 거래소 미체결 조회 → reconciliation 필요 |
+| 7 | OrderTracker/check_timeouts 파이프라인 연결 | (통합 작업) | OrderTracker는 아직 주문 파이프라인에 미연결. `check_timeouts` 주기 호출 + TimeoutCallback에서 REST 조회 연결 필요 |
 
 ## 🟠 미해결 — 안정화 (Priority 3)
 
@@ -101,3 +132,4 @@
 ## 이력
 
 - 2026-06-10: 최초 리뷰 + Priority 1 수정 (TLS, TCP 인증, 시그널 핸들러)
+- 2026-06-10: Priority 2 수정 (수량 기반 recovery, OrderTracker 타임아웃 에스컬레이션, FX 스테일 게이트, 주문 멱등성 + client_order_id 자동 생성)

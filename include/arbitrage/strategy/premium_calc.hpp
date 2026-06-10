@@ -39,7 +39,15 @@ public:
     
     // 환율 업데이트
     void update_fx_rate(double rate);
-    
+
+    // 환율 스테일 여부 (마지막 update_fx_rate 이후 fx_max_age_ms 초과)
+    // 스테일 상태에서는 get_best_opportunity/get_opportunities가 기회를
+    // 반환하지 않는다 (잘못된 환율로 거래 판단 방지, fail-closed).
+    bool is_fx_stale() const;
+
+    // 환율 최대 허용 나이 (기본 120초 = FX 갱신 주기 30초의 4배)
+    void set_fx_max_age_ms(int64_t ms) { fx_max_age_ms_.store(ms); }
+
     // 김프 조회 (buy -> sell)
     double get_premium(Exchange buy, Exchange sell) const;
     
@@ -64,6 +72,9 @@ private:
     
     // KRW 가격으로 변환
     double to_krw(Exchange ex, double price) const;
+
+    // FX 스테일 경고 (rate-limited)
+    void warn_fx_stale() const;
     
     // 김프 계산 공식
     // 김프(%) = (매도가 - 매수가) / 매수가 × 100
@@ -76,8 +87,11 @@ private:
     std::array<std::atomic<double>, 4> prices_{};
     
     // 환율
-    std::atomic<double> fx_rate_{1350.0};  // 기본값
-    
+    std::atomic<double> fx_rate_{1350.0};  // 기본값 (첫 update 전에는 스테일 취급)
+    std::atomic<int64_t> fx_updated_at_ms_{0};        // 마지막 환율 갱신 시각 (0 = 미갱신)
+    std::atomic<int64_t> fx_max_age_ms_{120000};      // 스테일 임계값
+    mutable std::atomic<int64_t> last_stale_warn_ms_{0};  // 경고 rate limit
+
     // 김프 매트릭스 [buy][sell]
     PremiumMatrix matrix_;
     
