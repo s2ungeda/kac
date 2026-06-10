@@ -4,8 +4,13 @@
 
 #include <algorithm>
 #include <csignal>
+#include <cstdlib>
 #include <iostream>
 #include <thread>
+
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 namespace arbitrage {
 
@@ -66,26 +71,39 @@ void ShutdownManager::uninstall_signal_handlers() {
     handlers_installed_ = false;
 }
 
+// 시그널 핸들러 ↔ 일반 컨텍스트 간 전달용 플래그 (lock-free atomic만 사용)
+namespace {
+std::atomic<int>  g_pending_signal{0};
+std::atomic<bool> g_signal_seen{false};
+
+static_assert(std::atomic<int>::is_always_lock_free,
+              "signal flag must be lock-free for async-signal-safety");
+}
+
 void ShutdownManager::signal_handler(int signum) {
-    // 시그널 핸들러에서는 async-signal-safe 함수만 호출해야 하므로
-    // 플래그만 설정하고 실제 종료는 다른 스레드에서 처리
-    auto& manager = instance();
-
-    bool expected = false;
-    if (manager.shutting_down_.compare_exchange_strong(expected, true,
-            std::memory_order_acq_rel)) {
-        // 첫 번째 시그널: 정상 종료 시작
-        manager.shutdown_reason_ = std::string("Signal ") + signal_name(signum);
-        manager.phase_.store(ShutdownPhase::Initiated, std::memory_order_release);
-
-        // 별도 스레드에서 종료 처리
-        std::thread([&manager]() {
-            manager.do_shutdown();
-        }).detach();
+    // async-signal-safe: lock-free atomic 조작과 write()/_Exit()만 사용.
+    // 실제 종료 처리(문자열 생성, 스레드 생성)는 wait_for_shutdown()을
+    // 돌고 있는 일반 스레드가 g_pending_signal을 소비하면서 수행한다.
+    if (!g_signal_seen.exchange(true, std::memory_order_acq_rel)) {
+        // 첫 번째 시그널: 정상 종료 요청
+        g_pending_signal.store(signum, std::memory_order_release);
     } else {
         // 두 번째 시그널: 강제 종료
-        std::cerr << "\n[SHUTDOWN] Received second signal, forcing exit...\n";
+#ifndef _WIN32
+        constexpr char msg[] = "\n[SHUTDOWN] Received second signal, forcing exit...\n";
+        ssize_t unused = ::write(STDERR_FILENO, msg, sizeof(msg) - 1);
+        (void)unused;
+#endif
         std::_Exit(128 + signum);
+    }
+}
+
+// 시그널 핸들러가 남긴 플래그를 일반 컨텍스트에서 소비
+static void consume_pending_signal(ShutdownManager& manager) {
+    int sig = g_pending_signal.exchange(0, std::memory_order_acq_rel);
+    if (sig != 0) {
+        manager.initiate_shutdown(
+            std::string("Signal ") + ShutdownManager::signal_name(sig));
     }
 }
 
@@ -162,7 +180,10 @@ void ShutdownManager::initiate_shutdown(const std::string& reason) {
         return;
     }
 
-    shutdown_reason_ = reason.empty() ? "Requested" : reason;
+    {
+        SpinLockGuard lock(mutex_);
+        shutdown_reason_ = reason.empty() ? "Requested" : reason;
+    }
     phase_.store(ShutdownPhase::Initiated, std::memory_order_release);
 
     // 별도 스레드에서 종료 처리
@@ -172,6 +193,15 @@ void ShutdownManager::initiate_shutdown(const std::string& reason) {
 }
 
 ShutdownResult ShutdownManager::wait_for_shutdown(std::chrono::milliseconds timeout) {
+    // 1단계: 종료가 시작될 때까지 무기한 대기
+    //         (시그널 핸들러가 남긴 플래그도 여기서 소비)
+    AdaptiveSpinWait waiter;
+    waiter.until([this] {
+        consume_pending_signal(*this);
+        return shutting_down_.load(std::memory_order_acquire);
+    });
+
+    // 2단계: 종료 완료까지 timeout 대기
     bool completed = SpinWait::until_for([this] {
         return shutdown_wakeup_.load(std::memory_order_acquire) ||
                phase_.load(std::memory_order_acquire) == ShutdownPhase::Completed ||
@@ -198,7 +228,11 @@ bool ShutdownManager::cancel_shutdown() {
     if (phase_.compare_exchange_strong(expected, ShutdownPhase::Running,
             std::memory_order_acq_rel)) {
         shutting_down_.store(false, std::memory_order_release);
-        shutdown_reason_.clear();
+        g_signal_seen.store(false, std::memory_order_release);
+        {
+            SpinLockGuard lock(mutex_);
+            shutdown_reason_.clear();
+        }
         return true;
     }
     return false;

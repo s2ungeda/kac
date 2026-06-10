@@ -118,7 +118,12 @@ void WebSocketClientBase::on_connect(beast::error_code ec, tcp::resolver::result
     if (!SSL_set_tlsext_host_name(ws_->next_layer().native_handle(), host_.c_str())) {
         logger_->error("[{}] Failed to set SNI hostname", exchange_name(exchange_));
     }
-    
+
+    // 인증서 호스트네임 검증 (verify_peer와 함께 MITM 방지)
+    if (!SSL_set1_host(ws_->next_layer().native_handle(), host_.c_str())) {
+        logger_->error("[{}] Failed to set verify hostname", exchange_name(exchange_));
+    }
+
     ws_->next_layer().async_handshake(
         ssl::stream_base::client,
         beast::bind_front_handler(

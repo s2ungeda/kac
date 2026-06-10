@@ -398,7 +398,7 @@ void TcpClientManager::process_message(int client_id, const Message& message,
 void TcpClientManager::handle_auth(int client_id, const Message& message,
                                     bool require_auth, int epoll_fd)
 {
-    // Parse username:password from payload
+    // Parse payload: "username:password" 또는 토큰 단독 ("token" → password에 전달)
     std::string payload = message.payload_str();
     size_t colon_pos = payload.find(':');
 
@@ -406,6 +406,8 @@ void TcpClientManager::handle_auth(int client_id, const Message& message,
     if (colon_pos != std::string::npos) {
         username = payload.substr(0, colon_pos);
         password = payload.substr(colon_pos + 1);
+    } else {
+        password = payload;  // 토큰 인증 모드
     }
 
     bool auth_success = false;

@@ -91,6 +91,7 @@ Application::Application(const AppOptions& opts)
     , ssl_ctx_(boost::asio::ssl::context::tlsv12_client)
 {
     ssl_ctx_.set_default_verify_paths();
+    ssl_ctx_.set_verify_mode(boost::asio::ssl::verify_peer);
 }
 
 Application::~Application() = default;
@@ -499,6 +500,17 @@ void Application::init_cold_services() {
         tcp_config.port = 9090;
         tcp_server_ = std::make_unique<TcpServer>(tcp_config);
         tcp_server_->set_event_bus(event_bus_);
+
+        // 토큰 기반 인증 (config server.auth_token). 토큰 미설정 시 전체 거부.
+        if (Config::instance().server().auth_token.empty()) {
+            logger_->warn("server.auth_token not set — TCP control clients cannot authenticate");
+        }
+        tcp_server_->set_auth_callback([](const std::string& /*username*/,
+                                          const std::string& password) {
+            const std::string& token = Config::instance().server().auth_token;
+            return !token.empty() && password == token;
+        });
+
         auto tcp_result = tcp_server_->start();
         if (tcp_result) {
             logger_->info("TCP server started on port {}", tcp_config.port);

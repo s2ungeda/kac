@@ -129,8 +129,8 @@ bool CLI::connect(const std::string& host, int port) {
 
     // 인증 (토큰이 있는 경우)
     if (!config_.auth_token.empty()) {
-        std::string auth_payload = "{\"token\":\"" + config_.auth_token + "\"}";
-        send_message(MsgType::AuthRequest, auth_payload);
+        // 서버는 "user:pass" 또는 토큰 단독 형식을 받음 — 토큰을 그대로 전송
+        send_message(MsgType::AuthRequest, config_.auth_token);
 
         auto response = receive_response();
         if (!response || response->first != MsgType::AuthResponse) {

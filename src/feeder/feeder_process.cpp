@@ -302,7 +302,7 @@ int FeederProcess::run() {
     net::io_context ioc;
     ssl::context ssl_ctx(ssl::context::tlsv12_client);
     ssl_ctx.set_default_verify_paths();
-    ssl_ctx.set_verify_mode(ssl::verify_none);
+    ssl_ctx.set_verify_mode(ssl::verify_peer);
 
     // 4. WebSocket 생성 + 구독 + 이벤트 콜백
     auto ws_client = create_ws_client(ioc, ssl_ctx);
