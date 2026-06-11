@@ -6,8 +6,8 @@
 ---
 
 ## 📅 마지막 업데이트
-- 날짜: 2026-03-23
-- 세션: #21
+- 날짜: 2026-06-11
+- 세션: #22
 
 ---
 
@@ -78,6 +78,22 @@
 ---
 
 ## 📝 작업 로그
+
+### 세션 #22 (2026-06-11)
+- Feeder 4종 실연결 재검증 중 버그 2건 발견 → 수정 (상세: docs/BINANCE_FEED_FIX.md)
+- **fix: Binance 피더 데이터 미수신**
+  - fstream에서 `@aggTrade` 스트림이 서버측 무응답 → `@trade`로 교체
+    (feeder_process.cpp, application.cpp)
+  - 선물 depth 페이로드 호가 키가 `"b"/"a"`인데 스팟 형식 `"bids"/"asks"`로
+    조회 → 빈 호가가 SHM에 push되던 버그. 페이로드 기반 맵 자동 선택으로 수정
+    (binance/websocket.cpp)
+  - 수정 후: ticks 0 → 305/20초, BestBid/Ask 정상 (1.1147/1.1148 USDT)
+- **Debug(ASan) 빌드 간헐 크래시 원인 규명**
+  - GCC 9 ASan ↔ 커널 6.5+ 고엔트로피 ASLR 비호환 (12회 중 5회 크래시)
+  - `setarch -R` 래핑 시 0회. 대응책 docs/BINANCE_FEED_FIX.md 참조
+- Release 빌드 트리 추가 (`build-release/`), 4개 피더 실연결 검증
+  - upbit ticks=11 ob=53, bithumb ticks=6 ob=97, binance ticks=305 ob=77,
+    mexc ticks=4 ob=67 (20초 기준)
 
 ### 세션 #1 (2025-12-09)
 - 17:00 - TASK_01 시작
@@ -896,6 +912,9 @@
 
 - C++20 기능 중 일부가 GCC 9.4에서 제한적 (std::expected 미지원으로 Result 클래스 직접 구현)
 - yaml-cpp CMake 설정 경고 (동작에는 문제 없음)
+- **Debug(ASan) 빌드 간헐적 시작 크래시 (~40%)**: GCC 9 ASan ↔ 커널 6.5+ ASLR 비호환.
+  `setarch $(uname -m) -R`로 실행하거나 `sudo sysctl vm.mmap_rnd_bits=28` 적용.
+  상세: docs/BINANCE_FEED_FIX.md
 
 ### ✅ 해결된 이슈 (2026-01-15)
 - ~~Boost.Beast 미설치~~ → libboost-all-dev 설치됨
@@ -912,14 +931,8 @@
 
 ## 📌 다음 할 일
 
-Phase 9 Feed Handler 프로세스 분리:
-1. ~~TASK_36: ShmSPSCQueue~~ ✅
-2. ~~TASK_37: FeederProcess~~ ✅
-3. **TASK_38 (Feeder Executables)** ← 다음
-   - 4개 거래소별 실행 파일 (upbit-feeder, bithumb-feeder, binance-feeder, mexc-feeder)
-4. TASK_39: Engine SHM Consumer
-5. TASK_40: Watchdog 다중 프로세스
-6. TASK_41: Phase 2 통합 테스트
+- TASK_01~49 전부 완료. 신규 태스크 없음 — 후속 작업은 코드 리뷰 결과
+  (docs/CODE_REVIEW_2026-06.md) 및 실거래 검증 위주로 진행
 
 ---
 
@@ -928,7 +941,7 @@ Phase 9 Feed Handler 프로세스 분리:
 - OS: Linux (WSL2, Ubuntu 20.04)
 - 컴파일러: g++ 9.4.0
 - CMake: 3.16.3
-- 빌드 상태: ✅ 성공
+- 빌드: ✅ Debug(`build/`, ASan) + Release(`build-release/`) 모두 성공
 - 테스트 상태: ✅ lowlatency_test, rate_limiter_test, executor_test, transfer_test, event_bus_test, thread_manager_test, shutdown_test, health_check_test, tcp_server_test, alert_test, daily_limit_test, watchdog_test, cli_test, trading_stats_test, integration_test, shm_queue_test, feeder_test 통과
 
 ---
@@ -936,17 +949,7 @@ Phase 9 Feed Handler 프로세스 분리:
 ## 📊 전체 진행률
 
 ```
-Phase 1 (기반):     ✅✅✅✅✅ 5/5 ✔️ 완료!
-Phase 2 (성능):     ✅✅ 2/2 ✔️ 완료!
-Phase 3 (거래):     ✅✅ 2/2 ✔️ 완료!
-Phase 4 (전략):     ✅✅✅✅✅ 5/5 ✔️ 완료!
-Phase 5 (인프라):   ✅✅✅✅✅✅ 6/6 ✔️ 완료!
-Phase 6 (서버):     ✅✅✅✅✅✅ 6/6 ✔️ 완료!
-Phase 7 (모니터링): ✅✅✅ 3/3 ✔️ 완료!
-
-Phase 9 (피드):     ✅✅⬜⬜⬜⬜ 2/6
-
-총 진행률: 37/49 (76%) — Phase 9 진행 중
+TASK_01~49 (Phase 1~10) 전부 완료 — 49/49 (100%)
 ```
 
 > ⚠️ 실행 순서는 TASK_ORDER.md 참조

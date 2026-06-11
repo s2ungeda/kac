@@ -198,10 +198,11 @@ void FeederProcess::subscribe_symbols(std::shared_ptr<WebSocketClientBase>& ws) 
             }
 
             // Binance: target에 stream 파라미터 포함 (trade + depth)
+            // 주의: fstream에서 @aggTrade는 데이터가 오지 않음 — @trade 사용
             if (config_.ws_target.empty() && !config_.symbols.empty()) {
                 std::string sym = config_.symbols[0];
                 std::transform(sym.begin(), sym.end(), sym.begin(), ::tolower);
-                config_.ws_target = "/stream?streams=" + sym + "@aggTrade/"
+                config_.ws_target = "/stream?streams=" + sym + "@trade/"
                                   + sym + "@depth10";
             }
             break;

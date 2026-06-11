@@ -704,8 +704,9 @@ int Application::subscribe_and_connect() {
         std::string binance_symbol_lower = symbol.binance;
         std::transform(binance_symbol_lower.begin(), binance_symbol_lower.end(),
                        binance_symbol_lower.begin(), ::tolower);
+        // fstream에서 @aggTrade는 데이터가 오지 않음 — @trade 사용
         binance_ws_->connect("fstream.binance.com", "443",
-                            "/stream?streams=" + binance_symbol_lower + "@aggTrade");
+                            "/stream?streams=" + binance_symbol_lower + "@trade");
         bithumb_ws_->connect("ws-api.bithumb.com", "443", "/websocket/v1");
         mexc_ws_->connect("contract.mexc.com", "443", "/edge");
     } else {

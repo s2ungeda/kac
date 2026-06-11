@@ -80,11 +80,19 @@ namespace {
     const TickerFieldMap BINANCE_TICKER_MAP {
         "s", "c", "b", "a", "v", "E", 1000, false
     };
-    const OrderBookFieldMap BINANCE_OB_MAP {
+    // 스팟 partial depth: {"lastUpdateId":..,"bids":[..],"asks":[..]}
+    const OrderBookFieldMap BINANCE_OB_MAP_SPOT {
         "s", "E", 1000,
         OrderBookFieldMap::TUPLES,
         "", "", "", "", "", false,
         "bids", "asks"
+    };
+    // 선물(fstream) depthUpdate: {"e":"depthUpdate","s":..,"b":[..],"a":[..]}
+    const OrderBookFieldMap BINANCE_OB_MAP_FUTURES {
+        "s", "E", 1000,
+        OrderBookFieldMap::TUPLES,
+        "", "", "", "", "", false,
+        "b", "a"
     };
     const TradeFieldMap BINANCE_TRADE_MAP {
         "s", "p", "q", "T", 1000
@@ -142,7 +150,9 @@ void BinanceWebSocket::parse_ticker(simdjson::dom::element data) {
 }
 
 void BinanceWebSocket::parse_orderbook(simdjson::dom::element data, std::string_view stream_symbol) {
-    auto orderbook = make_orderbook(data, BINANCE_OB_MAP, stream_symbol);
+    const auto& map = simd_has_field(data, "b") ? BINANCE_OB_MAP_FUTURES
+                                                : BINANCE_OB_MAP_SPOT;
+    auto orderbook = make_orderbook(data, map, stream_symbol);
 
     if (orderbook.bid_count > 0 && orderbook.ask_count > 0) {
         logger_->info("[Binance] OrderBook - Symbol: {}, Bids: {}, Asks: {}, BestBid: {}, BestAsk: {}",
