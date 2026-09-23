@@ -93,4 +93,10 @@
   종료.                                                                                
                                                                                        
   강제 종료: SIGTERM 후 타임아웃 내 미종료 시 SIGKILL 전송. Ctrl+C 두 번 누르면 즉시   
-  _Exit().                   
+  _Exit().        
+
+
+
+    - 중간 우선순위 리팩터링: 거래소 WebSocket 중복 제거, 싱글톤 정리
+  - mutex → lock-free 전환: 프로젝트 원칙 준수
+  - 실제 API 키 등록: secrets edit으로 바로 가능           
